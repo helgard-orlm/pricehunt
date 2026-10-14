@@ -6,7 +6,7 @@
     const tick = () => {
       const el = document.querySelector(sel);
       if (el) return res(el);
-      if (Date.now() - t0 > ms) return rej(new Error("нет элемента " + sel));
+      if (Date.now() - t0 > ms) return rej(new Error("element not found: " + sel));
       setTimeout(tick, 300);
     };
     tick();

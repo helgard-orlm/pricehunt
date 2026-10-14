@@ -1,6 +1,7 @@
 // Модель агента: любая с OpenAI-совместимым /v1/chat/completions — Ollama на компьютере пользователя
 // или любой другой адрес (llama.cpp, vLLM, облако). Проценты «как у Jev» = вероятность первого токена Yes/No
 // из logprobs (их отдают и Ollama, и llama-server — проверено 14.10).
+import { t } from "./i18n.js";
 
 const api = typeof browser !== "undefined" ? browser : chrome;
 
@@ -106,7 +107,7 @@ export class Model {
     const headers = { "Content-Type": "application/json" };
     if (this.cfg.key) headers.Authorization = "Bearer " + this.cfg.key;
     const r = await fetch(this.base + "/v1/chat/completions", { method: "POST", headers, body: JSON.stringify(body) });
-    if (!r.ok) throw new Error(`модель ответила ${r.status}: ${(await r.text()).slice(0, 160)}`);
+    if (!r.ok) throw new Error(t("model_http", { s: r.status, t: (await r.text()).slice(0, 160) }));
     return r.json();
   }
 

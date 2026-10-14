@@ -3,6 +3,7 @@
 // поиск по фото — вкладка главной, «камера» нажимается как человеком (content/imgsearch.js).
 
 import { parseItem, pdpResult, parseSearch } from "./parse.js";
+import { t } from "./i18n.js";
 
 const api = typeof browser !== "undefined" ? browser : chrome;
 const PAUSE_MS = 800;
@@ -37,7 +38,7 @@ function withTab(url, accept, { onCaptcha, onReady } = {}) {
       if (captcha) return;
       captcha = true;
       clearTimeout(timer);
-      timer = setTimeout(() => finish(null, new Captcha("капча не решена за 5 минут")), CAPTCHA_WAIT);
+      timer = setTimeout(() => finish(null, new Captcha(t("captcha_timeout"))), CAPTCHA_WAIT);
       api.tabs.update(tabId, { active: true }).catch(() => {});
       api.tabs.get(tabId).then((t) => api.windows.update(t.windowId, { focused: true })).catch(() => {});
       onCaptcha && onCaptcha();

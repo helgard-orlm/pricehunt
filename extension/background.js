@@ -21,7 +21,7 @@ async function setModelHost(base) {
         condition: { urlFilter: `|${u.protocol}//${u.host}/`, resourceTypes: ["xmlhttprequest", "other"] },
       }],
     });
-  } catch (e) { console.warn("pricehunt: правило для модели не поставлено", e); }
+  } catch (e) { console.warn("pricehunt: model host rule not set", e); }
 }
 
 async function init() {

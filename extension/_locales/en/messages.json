@@ -1,0 +1,11 @@
+{
+  "ext_name": {
+    "message": "pricehunt — the same thing, cheaper"
+  },
+  "ext_desc": {
+    "message": "Open an AliExpress product, pick the variant you want, and a local open-weight model hunts for the exact same item at a lower real price (variant + shipping)."
+  },
+  "ext_action": {
+    "message": "pricehunt — find this cheaper"
+  }
+}

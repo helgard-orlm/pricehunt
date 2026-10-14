@@ -1,24 +1,88 @@
 {
   "manifest_version": 3,
-  "name": "pricehunt — the same thing, cheaper",
+  "name": "__MSG_ext_name__",
   "short_name": "pricehunt",
-  "version": "1.0.0",
-  "description": "Open an AliExpress product, pick the variant you want, and a local open-weight model hunts for the exact same item at a lower real price (variant + shipping).",
-  "permissions": ["tabs", "storage", "sidePanel", "declarativeNetRequest"],
+  "version": "1.1.0",
+  "description": "__MSG_ext_desc__",
+  "permissions": [
+    "tabs",
+    "storage",
+    "sidePanel",
+    "declarativeNetRequest"
+  ],
   "host_permissions": [
-    "*://*.aliexpress.com/*", "*://*.aliexpress-media.com/*", "*://*.alicdn.com/*",
-    "http://localhost:11434/*", "http://127.0.0.1:11434/*"
+    "*://*.aliexpress.com/*",
+    "*://*.aliexpress-media.com/*",
+    "*://*.alicdn.com/*",
+    "http://localhost:11434/*",
+    "http://127.0.0.1:11434/*"
   ],
-  "optional_host_permissions": ["http://*/*", "https://*/*"],
-  "background": { "service_worker": "background.js", "scripts": ["background.js"] },
-  "side_panel": { "default_path": "panel.html" },
-  "sidebar_action": { "default_panel": "panel.html", "default_title": "pricehunt", "open_at_install": false },
-  "action": { "default_title": "pricehunt — find this cheaper" },
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "sidebar_action": {
+    "default_panel": "panel.html",
+    "default_title": "pricehunt",
+    "open_at_install": false
+  },
+  "action": {
+    "default_title": "__MSG_ext_action__"
+  },
   "content_scripts": [
-    { "matches": ["*://*.aliexpress.com/item/*"], "js": ["content/hook.js"], "run_at": "document_start", "world": "MAIN" },
-    { "matches": ["*://*.aliexpress.com/item/*"], "js": ["content/relay.js"], "run_at": "document_start" },
-    { "matches": ["*://*.aliexpress.com/w/*"], "js": ["content/searchpage.js"], "run_at": "document_idle" },
-    { "matches": ["*://www.aliexpress.com/", "*://www.aliexpress.com/?*"], "js": ["content/imgsearch.js"], "run_at": "document_idle" }
+    {
+      "matches": [
+        "*://*.aliexpress.com/item/*"
+      ],
+      "js": [
+        "content/hook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://*.aliexpress.com/item/*"
+      ],
+      "js": [
+        "content/relay.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.aliexpress.com/w/*"
+      ],
+      "js": [
+        "content/searchpage.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://www.aliexpress.com/",
+        "*://www.aliexpress.com/?*"
+      ],
+      "js": [
+        "content/imgsearch.js"
+      ],
+      "run_at": "document_idle"
+    }
   ],
-  "browser_specific_settings": { "gecko": { "id": "pricehunt@helgard-orlm", "strict_min_version": "128.0" } }
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "pricehunt@helgard-orlm",
+      "strict_min_version": "128.0"
+    }
+  },
+  "default_locale": "en"
 }

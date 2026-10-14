@@ -3,6 +3,7 @@ import { Model, loadSettings, saveSettings, listOllama, listOpenAI } from "./lib
 import { variantGroups, itemIdFromUrl, skuFromUrl } from "./lib/parse.js";
 import * as browse from "./lib/browse.js";
 import { Hunt } from "./lib/agent.js";
+import { t, LANGS, getLang, setLang, applyDom } from "./lib/i18n.js";
 
 const api = typeof browser !== "undefined" ? browser : chrome;
 const $ = (id) => document.getElementById(id);
@@ -10,7 +11,23 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const money = (v, cur) => (v == null ? "?" : (!cur || cur === "USD" ? "$" + Number(v).toFixed(2) : Number(v).toFixed(2) + " " + cur));
 const pct = (x) => (x == null ? "—" : Math.round(x * 100) + "%");
 
-let cfg = null, product = null, pick = {}, hunt = null, logLines = [];
+let probeSeq = 0;           // только последняя проверка адреса пишет результат (старая может закончиться позже)
+let cfg = null, product = null, pick = {}, hunt = null, logLines = [], readError = null, lastState = null;
+
+// ---------- язык ----------
+async function loadLang() {
+  try { const s = await api.storage.local.get("lang"); if (s.lang) setLang(s.lang); } catch {}
+  $("langsel").innerHTML = Object.entries(LANGS).map(([k, n]) => `<option value="${k}">${n}</option>`).join("");
+  $("langsel").value = getLang();
+  applyDom();
+}
+$("langsel").onchange = async () => {
+  setLang($("langsel").value);
+  try { await api.storage.local.set({ lang: getLang() }); } catch {}
+  applyDom();
+  renderProduct();
+  if (lastState) render(lastState);
+};
 
 // ---------- модель ----------
 async function showSetup(open) {
@@ -23,7 +40,8 @@ async function showSetup(open) {
 
 async function probe() {
   const base = $("base").value.trim() || "http://localhost:11434";
-  $("probeout").textContent = "проверяю…";
+  const seq = ++probeSeq;
+  $("probeout").textContent = t("probing");
   $("help").hidden = true;
   // чужой адрес (не localhost:11434) — нужно разрешение на него; спрашиваем только по кнопке
   try {
@@ -34,16 +52,20 @@ async function probe() {
   await api.runtime.sendMessage({ kind: "model_host", base }).catch(() => {});
   let models = await listOllama(base), kind = "ollama";
   if (!models) { models = await listOpenAI(base, $("key").value.trim()); kind = "openai"; }
+  if (seq !== probeSeq) return;
   if (!models) {
-    $("probeout").innerHTML = `<span style="color:var(--warn)">не отвечает: ${esc(base)}</span>`;
+    // частая путаница: вписан адрес тестового сайта pricehunt вместо адреса модели
+    const stand = await fetch(base, { cache: "no-store" }).then((r) => r.text()).then((h) => /<title>[^<]*pricehunt/i.test(h)).catch(() => false);
+    $("probeout").innerHTML = `<span style="color:var(--warn)">${esc(t("no_answer", { base }))}</span>` +
+      (stand && seq === probeSeq ? `<br><span style="color:var(--warn)">${esc(t("stand_hint"))}</span>` : "");
     $("help").hidden = false;
     $("modelsel").innerHTML = "";
     return;
   }
   const vis = models.filter((m) => m.vision !== false);
-  $("probeout").innerHTML = `<span style="color:var(--acc)">✓ ${kind === "ollama" ? "Ollama" : "сервер OpenAI-формата"}: моделей ${models.length}` +
-    (kind === "ollama" ? `, со зрением ${models.filter((m) => m.vision).length}` : "") + "</span>";
-  $("modelsel").innerHTML = models.map((m) => `<option value="${esc(m.name)}" data-vision="${m.vision}">${esc(m.name)}${m.vision ? " 👁" : m.vision === false ? " (без зрения)" : ""}</option>`).join("");
+  $("probeout").innerHTML = `<span style="color:var(--acc)">${esc(kind === "ollama"
+    ? t("ok_ollama", { n: models.length, v: models.filter((m) => m.vision).length }) : t("ok_openai", { n: models.length }))}</span>`;
+  $("modelsel").innerHTML = models.map((m) => `<option value="${esc(m.name)}" data-vision="${m.vision}">${esc(m.name)}${m.vision ? " 👁" : m.vision === false ? " " + t("no_vision") : ""}</option>`).join("");
   const keep = models.find((m) => m.name === cfg.model) || vis[0] || models[0];
   if (keep) $("modelsel").value = keep.name;
   $("modelsel").dataset.kind = kind;
@@ -54,7 +76,7 @@ $("gear").onclick = () => showSetup($("setup").hidden);
 $("probe").onclick = probe;
 $("savecfg").onclick = async () => {
   const opt = $("modelsel").selectedOptions[0];
-  if (!opt) { $("probeout").textContent = "сначала проверь адрес — нужна модель"; return; }
+  if (!opt) { $("probeout").textContent = t("need_model"); return; }
   cfg = { base: $("base").value.trim() || "http://localhost:11434", kind: $("modelsel").dataset.kind || "ollama",
           model: opt.value, key: $("key").value.trim(), vision: opt.dataset.vision !== "false" };
   await saveSettings(cfg);
@@ -71,12 +93,13 @@ async function loadProduct() {
   const pid = tab && itemIdFromUrl(tab.url);
   if (!pid || !/aliexpress\./.test(tab.url)) { product = null; renderProduct(); return; }
   if (product && product.id === pid) return;
-  $("noproduct").textContent = "читаю товар…";
+  readError = null;
+  $("noproduct").textContent = t("reading");
   try {
     const s = await api.storage.session.get("pdp_" + tab.id);
     const saved = s["pdp_" + tab.id];
     const item = saved && itemIdFromUrl(saved.url) === pid ? browse.itemFromRaw(pid, saved.raw) : await browse.item(pid);
-    if (!item) throw new Error("страница не отдала данные — обнови её (F5)");
+    if (!item) throw new Error(t("no_data"));
     product = { id: pid, item, groups: variantGroups(item), urlSku: skuFromUrl(tab.url) };
     const start = item.variants.find((v) => v.sku === product.urlSku) || item.variants.find((v) => v.salable !== false) || item.variants[0];
     pick = {};
@@ -86,7 +109,7 @@ async function loadProduct() {
     }
   } catch (e) {
     product = null;
-    $("noproduct").textContent = "не получилось прочитать товар: " + e.message;
+    readError = e.message;
   }
   renderProduct();
 }
@@ -100,7 +123,7 @@ function chosen() {
 function renderProduct() {
   $("pcard").hidden = !product;
   $("noproduct").hidden = !!product;
-  if (!product) { if (!$("noproduct").textContent.startsWith("не получилось")) $("noproduct").textContent = "Открой страницу товара на AliExpress — здесь появятся его варианты."; return; }
+  if (!product) { $("noproduct").textContent = readError ? t("read_fail", { e: readError }) : t("noproduct"); return; }
   const it = product.item, v = chosen();
   $("ptitle").textContent = it.title;
   $("pimg").src = (v && v.img) || it.main_images[0] || "";
@@ -114,12 +137,12 @@ function renderProduct() {
   const ship = ships.length ? Math.min(...ships) : null;
   if (v) {
     const p = v.welcome_deal && v.original ? v.original : v.price;
-    $("pprice").innerHTML = `<b>${money(p, it.currency)}</b> + доставка ${money(ship, it.currency)} = <b>${money(p + (ship || 0), it.currency)}</b>` +
-      (v.welcome_deal ? ` <span class="mute">(цена для новичков ${money(v.price, it.currency)} не учтена)</span>` : "");
-  } else $("pprice").textContent = "такого сочетания нет — выбери другое";
+    $("pprice").innerHTML = `<b>${money(p, it.currency)}</b> + ${t("shipping")} ${money(ship, it.currency)} = <b>${money(p + (ship || 0), it.currency)}</b>` +
+      (v.welcome_deal ? ` <span class="mute">${esc(t("welcome_ignored", { p: money(v.price, it.currency) }))}</span>` : "");
+  } else $("pprice").textContent = t("no_combo");
   const ready = cfg && cfg.model;
   $("go").disabled = !v || !ready || (hunt && !hunt.done);
-  $("go").textContent = ready ? "Найти дешевле такой же" : "Сначала выбери модель (⚙)";
+  $("go").textContent = ready ? t("go") : t("pick_model");
 }
 
 // ---------- поиск ----------
@@ -137,12 +160,12 @@ $("go").onclick = async () => {
     on: { log, update: render, captcha: (on) => ($("captcha").hidden = !on) },
   });
   try { await hunt.run(); }
-  catch (e) { log("ОШИБКА: " + e.message); }
+  catch (e) { log(t("error", { e: e.message })); }
   $("stop").hidden = true; $("mine").hidden = false;
   renderProduct();
   saveHistory();
 };
-$("stop").onclick = () => { if (hunt) { hunt.cancelled = true; log("остановлено — показываю, что успел"); } };
+$("stop").onclick = () => { if (hunt) { hunt.cancelled = true; log(t("stopped")); } };
 
 $("cmp").onclick = async () => {
   const urls = $("minetext").value.split(/\s+/).filter((u) => /aliexpress|^\d{10,}$/.test(u));
@@ -160,16 +183,17 @@ function log(t) {
 }
 
 function tagOf(c) {
-  if (c.source === "ref") return '<span class="tag ref">ТВОЙ</span>';
-  const t = c.tier === 0 ? '<span class="tag t0">ТОЧНО ТАКОЙ</span>' : c.tier === 1 ? '<span class="tag t1">ПОХОЖИЙ</span>' : '<span class="tag t2">ДРУГОЙ</span>';
-  return (c.source === "human" ? '<span class="tag human">ТЫ НАШЁЛ</span>' : "") + t;
+  if (c.source === "ref") return `<span class="tag ref">${t("tag_ref")}</span>`;
+  const tier = c.tier === 0 ? `<span class="tag t0">${t("tag_exact")}</span>` : c.tier === 1 ? `<span class="tag t1">${t("tag_similar")}</span>` : `<span class="tag t2">${t("tag_other")}</span>`;
+  return (c.source === "human" ? `<span class="tag human">${t("tag_human")}</span>` : "") + tier;
 }
 
 function render(s) {
+  lastState = s;
   $("slevel").textContent = s.level || "—";
   $("sfat").textContent = `${s.fatigue}/3`;
   $("sseen").textContent = `${s.seen} / ${s.checked}`;
-  $("stime").textContent = `${s.elapsed} с`;
+  $("stime").textContent = t("sec", { n: s.elapsed });
   const cur = product?.item.currency;
   const exact = s.rows.filter((c) => c.tier === 0 && c.source !== "ref");
   const bestA = exact.filter((c) => c.source === "agent").sort((a, b) => a.total - b.total)[0];
@@ -177,19 +201,19 @@ function render(s) {
   let v = "";
   if (s.ref && bestA) {
     const d = s.ref.total - bestA.total;
-    v = d > 0.005 ? `✓ Нашёл дешевле твоего на ${money(d, cur)}: ${money(bestA.total, cur)} вместо ${money(s.ref.total, cur)}` :
-        `Дешевле твоего пока не нашёл (лучший точно такой: ${money(bestA.total, cur)})`;
-  } else if (s.done) v = "Точно такого же дешевле не нашлось.";
-  if (bestH && bestA) v += bestH.total < bestA.total - 0.005 ? ` · 🏆 ты нашёл дешевле агента на ${money(bestA.total - bestH.total, cur)}`
-    : bestA.total < bestH.total - 0.005 ? ` · агент нашёл дешевле тебя на ${money(bestH.total - bestA.total, cur)}` : " · ничья";
-  if (s.done && s.confidence != null) v += ` · оценка «дешевле нет»: ${pct(s.confidence)}`;
-  if (s.blocked) v += " · поиск оборван капчей";
+    v = d > 0.005 ? t("v_cheaper", { d: money(d, cur), a: money(bestA.total, cur), r: money(s.ref.total, cur) }) :
+        t("v_not_yet", { a: money(bestA.total, cur) });
+  } else if (s.done) v = t("v_none");
+  if (bestH && bestA) v += bestH.total < bestA.total - 0.005 ? t("v_human_wins", { d: money(bestA.total - bestH.total, cur) })
+    : bestA.total < bestH.total - 0.005 ? t("v_agent_wins", { d: money(bestH.total - bestA.total, cur) }) : t("v_tie");
+  if (s.done && s.confidence != null) v += t("v_conf", { p: pct(s.confidence) });
+  if (s.blocked) v += t("v_captcha");
   $("verdict").textContent = v;
   $("list").innerHTML = s.rows.map((c) => `
     <div class="item${c.tier === 2 ? " dim" : ""}">
       <a href="${esc(c.url)}" target="_blank" rel="noopener"><img src="${esc(c.img || "")}" alt="" loading="lazy"></a>
       <div>${tagOf(c)}<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a>
-        <div class="mute small">${esc(c.variant)}${c.same != null ? ` · похож на образец ${pct(c.same)}` : ""}${c.p_good != null ? ` · оценка ${pct(c.p_good)}` : ""}</div>
+        <div class="mute small">${esc(c.variant)}${c.same != null ? " · " + esc(t("like_ref", { p: pct(c.same) })) : ""}${c.p_good != null ? " · " + esc(t("score", { p: pct(c.p_good) })) : ""}</div>
         ${(c.flags || []).map((f) => `<span class="flag">⚠ ${esc(f)}</span>`).join("")}
       </div>
       <div><div class="total">${money(c.total, c.currency)}</div><div class="sub">${money(c.price, c.currency)} + ${money(c.shipping, c.currency)}</div></div>
@@ -214,6 +238,7 @@ api.tabs.onUpdated.addListener((id, info, tab) => {
   if ((forced ? String(id) === forced : tab.active) && (info.url || info.status === "complete")) loadProduct();
 });
 (async () => {
+  await loadLang();
   await showSetup(false);
   if (!cfg.model) await showSetup(true);
   await loadProduct();

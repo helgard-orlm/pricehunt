@@ -8,6 +8,7 @@
 
 import * as browse from "./browse.js";
 import { toJpegB64 } from "./model.js";
+import { t } from "./i18n.js";
 
 export const SAME_MIN = 0.3;      // ниже — «другой», чем образец
 export const EXACT_MIN = 0.7;     // от этого — «точно такой»; лучшим может быть только он
@@ -51,7 +52,7 @@ export class Hunt {
     this.levels = []; this.fatigue = 0; this.best = null; this.top = [];
     this.titlesUsed = new Set(); this.cancelled = false; this.blocked = false; this.done = false;
     this.confidence = null; this.t0 = Date.now(); this.image = null; this.intent = null; this.refEval = null;
-    this.hooks = { onCaptcha: () => { this.log("🧩 AliExpress показал капчу — сдвинь ползунок во вкладке, я подожду (до 5 минут)"); this.on.captcha?.(true); } };
+    this.hooks = { onCaptcha: () => { this.log(t("a_captcha")); this.on.captcha?.(true); } };
   }
 
   log(t) { this.on.log?.(t); }
@@ -77,7 +78,7 @@ export class Hunt {
     intent.queries = (intent.queries || []).filter(Boolean).slice(0, 6);
     if (v) intent.must.push("exactly this variant: " + v);
     this.intent = intent;
-    this.log(`понял так: ${intent.what}` + (intent.not.length ? ` · не путать с: ${intent.not.join(", ")}` : ""));
+    this.log(t("a_understood", { what: intent.what }) + (intent.not.length ? t("a_not", { x: intent.not.join(", ") }) : ""));
   }
 
   // ---------- сравнение с образцом ----------
@@ -103,7 +104,7 @@ export class Hunt {
     const ships = it.shipping.filter((s) => s.fee != null);
     const ship = ships.length ? ships.reduce((a, b) => (b.fee < a.fee ? b : a)) : null;
     let ans;
-    if (source === "ref") ans = { match: [0], note: "твой выбранный вариант" };
+    if (source === "ref") ans = { match: [0], note: t("a_your_variant") };
     else {
       const lines = variants.map((v, i) => `${i}. ${v.attrs.join("; ") || "default"} — ${v.price}`).join("\n");
       ans = await this.model.askJson(
@@ -119,28 +120,28 @@ export class Hunt {
         // число из выбранного варианта обязательно, если у товара вообще есть варианты с этой единицей
         if (variants.some((v) => unitsIn(v.attrs.join(" ")).has(tok[1]))) {
           const keep = match.filter((v) => hasSpec(v.attrs.join(" "), tok));
-          if (!keep.length && match.length) ans.note = `нет варианта ${tok[0]}${tok[1].toUpperCase()} (обязательно по выбранному варианту)`;
+          if (!keep.length && match.length) ans.note = t("a_no_spec_variant", { s: tok[0] + tok[1].toUpperCase() });
           match = keep;
         } else if (match.length && !hasSpec(it.title, tok)) {
-          flags.push(`в названии нет ${tok[0]}${tok[1].toUpperCase()} — проверь вручную`);
+          flags.push(t("a_spec_not_in_title", { s: tok[0] + tok[1].toUpperCase() }));
         }
       }
     }
     const url = `https://www.aliexpress.com/item/${it.id}.html`;
-    if (!match.length) return { id: it.id, title: it.title, url, source, rejected: true, note: ans.note || "нет подходящего варианта" };
+    if (!match.length) return { id: it.id, title: it.title, url, source, rejected: true, note: ans.note || t("a_no_variant") };
     const want = PLUG[this.shipTo] || "EU";
     const plugs = new Set(match.map((v) => plugOf(v.attrs)).filter(Boolean));
     if (plugs.size) {
       const mine = match.filter((v) => [want, null].includes(plugOf(v.attrs)));
-      if (mine.length) match = mine; else flags.push(`нет вилки ${want} — только ${[...plugs].join(", ")}`);
+      if (mine.length) match = mine; else flags.push(t("a_no_plug", { w: want, p: [...plugs].join(", ") }));
     }
     // цена для новичка недоступна старому покупателю: считаем по обычной (честно)
     const real = (v) => (v.welcome_deal ? v.original || v.price : v.price);
     const v = match.reduce((a, b) => (real(b) < real(a) ? b : a));
     const cheapest = variants.reduce((a, b) => (b.price < a.price ? b : a));
     if (cheapest.price < v.price - 0.01 && !match.includes(cheapest))
-      flags.push(`цена в выдаче ${this.m(cheapest.price)} — это «${cheapest.attrs.join("; ")}», не нужный товар`);
-    if (v.welcome_deal) flags.push(`${this.m(v.price)} — только для новых покупателей; считаю по обычной ${this.m(real(v))}`);
+      flags.push(t("a_list_price", { p: this.m(cheapest.price), v: cheapest.attrs.join("; ") }));
+    if (v.welcome_deal) flags.push(t("a_welcome", { p: this.m(v.price), r: this.m(real(v)) }));
     const img = v.img || it.main_images[0] || null;
     let same = null;
     if (source !== "ref" && img && this.image) {
@@ -149,7 +150,7 @@ export class Hunt {
       if (same != null && same < SAME_MIN) {
         const diff = await this.model.ask("Image 1 is what the shopper wants, image 2 is an offer. In max 15 words: the main difference?",
           ["data:image/jpeg;base64," + this.image, img], 50).catch(() => "");
-        flags.push(`не такой, как образец (${Math.round(same * 100)}%)` + (diff ? `: ${diff}` : ""));
+        flags.push(t("a_not_like", { p: Math.round(same * 100) }) + (diff ? `: ${diff}` : ""));
       }
     }
     const fee = ship ? ship.fee : null;
@@ -170,17 +171,17 @@ export class Hunt {
       let it;
       try { it = await browse.item(pid, this.hooks); }
       catch (e) {
-        if (e instanceof browse.Captcha) { this.blocked = true; this.log("⛔ капча не решена — показываю, что успел проверить"); break; }
-        this.log(`  не открылся ${pid}: ${e.message}`); continue;
+        if (e instanceof browse.Captcha) { this.blocked = true; this.log(t("a_captcha_stop")); break; }
+        this.log(`  ${t("a_not_opened", { id: pid })}: ${e.message}`); continue;
       }
       this.on.captcha?.(false);
-      if (!it) { this.log(`  не открылся ${pid}`); continue; }
+      if (!it) { this.log("  " + t("a_not_opened", { id: pid })); continue; }
       opened++;
       const ev = await this.evaluate(it, source);
       if (!ev) continue;
       this.checked.set(pid, ev);
       if (ev.rejected) this.log(`  ✗ ${it.title.slice(0, 60)} — ${ev.note}`);
-      else this.log(`  ✓ ${this.m(ev.total)} = ${this.m(ev.price)} + доставка ${this.m(ev.shipping)} · ${ev.variant.slice(0, 40)}` + (ev.flags.length ? " ⚠" : ""));
+      else this.log(`  ✓ ${t("a_ok_line", { t: this.m(ev.total), p: this.m(ev.price), s: this.m(ev.shipping) })} · ${ev.variant.slice(0, 40)}` + (ev.flags.length ? " ⚠" : ""));
       this.updateBest(); this.publish();
     }
     return opened;
@@ -191,12 +192,12 @@ export class Hunt {
     let res = await browse.search(q, { sort }, this.hooks);
     if (!res.length && sort !== "default") {
       // AliExpress иногда нарочно отдаёт пусто на сортировку/фильтр — это отказ, не «товаров нет»
-      this.log("  AliExpress отказал в сортировке — беру обычную выдачу и сортирую сам");
+      this.log("  " + t("a_sort_refused"));
       res = await browse.search(q, { sort: "default" }, this.hooks);
     }
     if (sort === "price_asc" && res.length) {
       const pr = res.map((x) => x.list_price);
-      if (pr.slice(1).filter((b, i) => b < pr[i] - 0.005).length > pr.length / 10) this.log("  выдача «по цене» пришла не по порядку — сортирую сам");
+      if (pr.slice(1).filter((b, i) => b < pr[i] - 0.005).length > pr.length / 10) this.log("  " + t("a_unsorted"));
     }
     return res;
   }
@@ -215,18 +216,18 @@ export class Hunt {
   }
 
   plan(n) {
-    if (n === 1) return [["поиск по фото образца", () => browse.photoSearch(this.image, this.hooks)]];
+    if (n === 1) return [[t("a_photo_ref"), () => browse.photoSearch(this.image, this.hooks)]];
     const plan = [];
     const title = this.nextExactTitle();
     if (title) {
-      plan.push([`дословное название совпадения «${title.slice(0, 60)}»`, () => this.search(title, "default")]);
-      plan.push(["то же название, по цене", () => this.search(title, "price_asc")]);
+      plan.push([t("a_exact_title", { t: title.slice(0, 60) }), () => this.search(title, "default")]);
+      plan.push([t("a_title_price"), () => this.search(title, "price_asc")]);
     }
     if (this.best && n % 2 === 1)
-      plan.push(["поиск по фото нового лучшего", async () => browse.photoSearch(await toJpegB64(this.best.img), this.hooks)]);
+      plan.push([t("a_photo_best"), async () => browse.photoSearch(await toJpegB64(this.best.img), this.hooks)]);
     if (!title) {
       const q = (this.intent.queries || []).find((x) => !this.titlesUsed.has(x.toLowerCase()));
-      if (q) { this.titlesUsed.add(q.toLowerCase()); plan.push([`запрос «${q}»`, () => this.search(q, "default")]); }
+      if (q) { this.titlesUsed.add(q.toLowerCase()); plan.push([t("a_query", { q }), () => this.search(q, "default")]); }
     }
     return plan;
   }
@@ -235,7 +236,7 @@ export class Hunt {
     const pool = hits.filter((h) => !this.checked.has(h.id));
     const byPrice = (a, b) => a.list_price - b.list_price;
     const free = pool.filter((h) => h.free_ship).sort(byPrice), paid = pool.filter((h) => !h.free_ship).sort(byPrice);
-    this.log(`  выдача: бесплатная доставка ${free.length}, платная ${paid.length} — смотрю по ${PER_VIEW} самых дешёвых в каждой`);
+    this.log("  " + t("a_split", { f: free.length, p: paid.length, n: PER_VIEW }));
     const look = [...free.slice(0, PER_VIEW), ...paid.slice(0, PER_VIEW)].filter((h) => h.img && !this.thumb.has(h.id));
     let good = 0;
     for (const h of look) {
@@ -243,11 +244,11 @@ export class Hunt {
       const p = await this.sameAsRef(h.img);
       if (p != null) { this.thumb.set(h.id, p); if (p >= EXACT_MIN) good++; }
     }
-    if (look.length) this.log(`  миниатюры: сравнил с образцом ${look.length}, точно таких ${good}`);
+    if (look.length) this.log("  " + t("a_thumbs", { n: look.length, g: good }));
     const exact = [...this.thumb].filter(([id, p]) => p >= EXACT_MIN && !this.checked.has(id) && this.seen.has(id))
       .map(([id]) => this.seen.get(id)).sort(byPrice);
     const pick = exact.slice(0, PER_LEVEL);
-    this.log(`  открываю ${pick.length} точно таких, дешёвые первыми`);
+    this.log("  " + t("a_opening", { n: pick.length }));
     return pick;
   }
 
@@ -272,26 +273,26 @@ export class Hunt {
 
   // ---------- главный цикл ----------
   async run() {
-    this.log("модель: " + this.model.label());
+    this.log(t("a_model", { m: this.model.label() }));
     const img = (this.ref.variant && this.ref.variant.img) || this.ref.item.main_images[0];
     this.image = img ? await toJpegB64(img) : null;
-    if (!this.image) throw new Error("у товара нет фото — сравнивать не с чем");
+    if (!this.image) throw new Error(t("a_no_photo"));
     await this.understand();
     this.refEval = await this.evaluate(this.ref.item, "ref");
-    if (this.refEval) this.log(`образец: ${this.m(this.refEval.total)} = ${this.m(this.refEval.price)} + доставка ${this.m(this.refEval.shipping)} — это надо побить`);
+    if (this.refEval) this.log(t("a_reference", { t: this.m(this.refEval.total), p: this.m(this.refEval.price), s: this.m(this.refEval.shipping) }));
     this.publish();
     let n = 0;
     while (n < MAX_LEVELS && Date.now() - this.t0 < TIME_BUDGET && !this.cancelled) {
       n++;
-      this.log(`— уровень ${n} (утомление ${this.fatigue}/${FATIGUE_LIMIT})`);
+      this.log(t("a_level", { n, f: this.fatigue, l: FATIGUE_LIMIT }));
       const hits = [];
       for (const [desc, fn] of this.plan(n)) {
         if (this.cancelled) break;
         let h = [];
-        try { h = await fn(); } catch (e) { this.log(`  ${desc}: ошибка ${e.message}`); continue; }
+        try { h = await fn(); } catch (e) { this.log("  " + t("a_err", { d: desc, e: e.message })); continue; }
         const fresh = h.filter((x) => !this.seen.has(x.id));
         for (const x of h) if (!this.seen.has(x.id)) this.seen.set(x.id, x);
-        this.log(`  ${desc}: ${h.length} товаров, новых ${fresh.length}`);
+        this.log("  " + t("a_found", { d: desc, n: h.length, k: fresh.length }));
         hits.push(...fresh);
       }
       const pick = this.cancelled ? [] : await this.pick(hits);
@@ -300,16 +301,16 @@ export class Hunt {
       this.updateBest();
       const improved = this.best && this.best.total < before - 0.005;
       this.levels.push({ n, found: hits.length, opened, improved: !!improved });
-      if (improved) { this.fatigue = 0; this.log(`  ★ новый лучший: ${this.m(this.best.total)} — утомление сброшено`); }
+      if (improved) { this.fatigue = 0; this.log("  " + t("a_new_best", { p: this.m(this.best.total) })); }
       else if (n >= FREE_LEVELS && (opened || !pick.length)) this.fatigue++;
       this.publish();
       if (this.blocked) break;
-      if (this.fatigue >= FATIGUE_LIMIT) { this.log("утомление на пределе — останавливаюсь"); break; }
+      if (this.fatigue >= FATIGUE_LIMIT) { this.log(t("a_tired")); break; }
       if (!hits.length && n > FREE_LEVELS + 2) break;
     }
     await this.score();
     this.done = true;
-    this.log(`готово за ${this.elapsed()} с: уровней ${this.levels.length}, видел ${this.seen.size}, открыл ${this.checked.size}`);
+    this.log(t("a_done", { s: this.elapsed(), l: this.levels.length, n: this.seen.size, k: this.checked.size }));
     this.publish();
   }
 
@@ -338,7 +339,7 @@ export class Hunt {
   /** «Я против агента»: ссылки пользователя проходят ту же проверку. */
   async addMine(urls) {
     const ids = urls.map((u) => (String(u).match(/\/item\/(\d+)/) || String(u).match(/(\d{10,})/) || [])[1]).filter(Boolean);
-    this.log(`проверяю твои находки: ${ids.length}`);
+    this.log(t("a_mine", { n: ids.length }));
     this.blocked = false;
     await this.open(ids, "human");
     this.updateBest();
