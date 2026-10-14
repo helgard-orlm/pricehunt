@@ -62,6 +62,13 @@ export class Hunt {
 
   // ---------- требования ----------
   hardSpecs() { return specTokens(this.ref.variant ? this.ref.variant.attrs.join(" ") : ""); }
+  /** Характеристики для отбора карточек выдачи: из выбранного варианта; если там нет — из названия образца, когда она одна (33W). */
+  pickSpecs() {
+    const v = this.hardSpecs();
+    if (v.length) return v;
+    const tt = specTokens(this.ref.item.title);
+    return tt.length === 1 ? tt : [];
+  }
 
   async understand() {
     const v = this.ref.variant ? this.ref.variant.attrs.map((a) => a.split(":").pop().trim()).join("; ") : "";
@@ -241,7 +248,17 @@ export class Hunt {
     this.log("  " + t("a_split", { f: free.length, p: paid.length, n: PER_VIEW }));
     const nb = pool.filter((h) => h.bundle).length;
     if (nb) this.log("  " + t("a_bundle_seen", { n: nb }));
-    const look = [...free.slice(0, PER_VIEW), ...paid.slice(0, PER_VIEW)].filter((h) => h.img && !this.thumb.has(h.id));
+    // сначала карточки с той же характеристикой в названии (33W, 100W…): иначе 5 «самых дешёвых» съедают кабели,
+    // другие мощности и цены для новичков (14.10: находка helgard стояла 13-й среди платной доставки, впереди — 20W/30W/кабели)
+    const want = this.pickSpecs();
+    const fits = (h) => want.every((tok) => hasSpec(h.title, tok));
+    const view = (part) => {
+      if (!want.length) return part.slice(0, PER_VIEW);
+      const yes = part.filter(fits), no = part.filter((h) => !fits(h));
+      return [...yes.slice(0, PER_VIEW), ...no.slice(0, Math.max(0, PER_VIEW - yes.length, 1))];
+    };
+    if (want.length) this.log("  " + t("a_spec_first", { s: want.map((x) => x[0] + x[1].toUpperCase()).join(" "), n: pool.filter(fits).length, m: pool.length }));
+    const look = [...view(free), ...view(paid)].filter((h) => h.img && !this.thumb.has(h.id));
     let good = 0;
     for (const h of look) {
       if (this.cancelled) break;
