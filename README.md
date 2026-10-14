@@ -49,7 +49,7 @@ All numbers below were measured with **MiniCPM-V 4.7 (35B-A3B, Q6_K)** served by
 
 What is **not** measured yet:
 - How well it catches *lying* listings, where the title says charger and the photo shows a cable. The 49/49 above are honestly named variants.
-- Other models. Gemma 4 12B (Ollama `gemma4:12b-it-qat`) scored 45/49: it mistook "cable only" for "charger with cable". We haven't tested anything else.
+- Other models only partly. Gemma 4 12B (Ollama `gemma4:12b-it-qat`) scored 45/49 on variant photos: it mistook "cable only" for "charger with cable". Gemma 4 31B through Ollama Cloud (`gemma4:31b-cloud`) scored 47/49, with the same trap, and it's fast (0.9 s per photo). Its "same product as your photo?" answers were weaker, though: of 7 COB listings it called the same, about 6 were a different type (copper DC chips, SMD boards, 12 V panels), and it rejected 4 real ESP-01 adapters shown next to the modules. Cloud models also send your photos to the cloud and return no logprobs. In that case the extension falls back to a plain Yes/No, so the percentages turn into 0%/100%.
 - The percentages on result cards are the model's probability of answering "Yes". That's an estimate, not a calibrated probability.
 
 ## Install (developer mode)

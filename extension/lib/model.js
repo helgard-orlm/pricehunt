@@ -136,14 +136,19 @@ export class Model {
     try { return m ? JSON.parse(m[0]) : fallback; } catch { return fallback; }
   }
 
-  /** Оценка «да» по вероятностям первого токена. Сервер без logprobs -> null. */
+  /** Оценка «да» по вероятностям первого токена. Сервер без logprobs (облачные модели Ollama) -> сам ответ: Yes 1, No 0. */
   async yesProb(text, images = []) {
-    let lps;
+    let r, lps;
     try {
-      const r = await this._chat(await this._content(text, images), 1, { logprobs: true, top_logprobs: 10 });
-      lps = r.choices[0].logprobs.content[0].top_logprobs;
+      r = await this._chat(await this._content(text, images), 1, { logprobs: true, top_logprobs: 10 });
     } catch {
       return null;
+    }
+    lps = r.choices?.[0]?.logprobs?.content?.[0]?.top_logprobs;
+    if (!lps) {
+      this.noLogprobs = true;
+      const w = String(r.choices?.[0]?.message?.content || "").trim().toLowerCase();
+      return w.startsWith("yes") ? 1 : w.startsWith("no") ? 0 : null;
     }
     let yes = 0, no = 0;
     for (const t of lps) {
