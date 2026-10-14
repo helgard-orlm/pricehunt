@@ -213,7 +213,8 @@ def _parse_search(html):
         end = starts[k + 1].start() if k + 1 < len(starts) else m.start() + 8000
         chunk = html[m.start():min(end, m.start() + 8000)]
         title = re.search(r'"displayTitle":"((?:[^"\\]|\\.)*)"', chunk)
-        price = re.search(r'"minPrice":([\d.]+)', chunk)
+        # у карточки со скидкой сначала original_price, потом sale_price — берём цену продажи (замер 14.10: 35 из 59)
+        price = re.search(r'"priceType":"sale_price"[^}]*?"minPrice":([\d.]+)', chunk) or re.search(r'"minPrice":([\d.]+)', chunk)
         img = re.search(r'"imgUrl":"([^"]+)"', chunk)
         if title and price:
             seen.add(m.group(1))

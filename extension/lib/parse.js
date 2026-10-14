@@ -101,7 +101,8 @@ export function parseSearch(html) {
     const end = Math.min(k + 1 < starts.length ? starts[k + 1][0] : at + 8000, at + 8000);
     const chunk = html.slice(at, end);
     const title = chunk.match(/"displayTitle":"((?:[^"\\]|\\.)*)"/);
-    const price = chunk.match(/"minPrice":([\d.]+)/);
+    // у карточки со скидкой две цены: сначала original_price (зачёркнутая), потом sale_price — берём цену продажи (замер 14.10: 35 из 59)
+    const price = chunk.match(/"priceType":"sale_price"[^}]*?"minPrice":([\d.]+)/) || chunk.match(/"minPrice":([\d.]+)/);
     const img = chunk.match(/"imgUrl":"([^"]+)"/);
     if (!title || !price) continue;
     seen.add(id);
@@ -113,6 +114,11 @@ export function parseSearch(html) {
       free_ship: chunk.includes("Free_Shipping") || chunk.includes("platformFreeShipping"),
       welcome: chunk.includes("welcomedeal"),
       same_style_best: chunk.includes("SAME_STYLE_PRICE_BEST"),
+      // «Пропозиції комплектів» (Bundle deals): карточка ведёт на BundleDeals2?productIds=<товар>:<вариант>,
+      // скидка — на заказ из нескольких РАЗНЫХ товаров («грн.150 off on 3 items»), не на штуку (замер 14.10)
+      bundle: /BundleDeals\d*\?productIds=/.test(chunk)
+        ? (() => { const n = chunk.match(/"title":"((?:[^"\\]|\\.)*?off on \d+ items?)"/); try { return n ? JSON.parse('"' + n[1] + '"') : "bundle"; } catch { return n ? n[1] : "bundle"; } })()
+        : null,
     });
   }
   return out;

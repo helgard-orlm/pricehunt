@@ -142,6 +142,8 @@ export class Hunt {
     if (cheapest.price < v.price - 0.01 && !match.includes(cheapest))
       flags.push(t("a_list_price", { p: this.m(cheapest.price), v: cheapest.attrs.join("; ") }));
     if (v.welcome_deal) flags.push(t("a_welcome", { p: this.m(v.price), r: this.m(real(v)) }));
+    const bundle = this.seen.get(it.id)?.bundle || null;     // метка «Пропозиції комплектів» с карточки выдачи
+    if (bundle && source !== "ref") flags.push(t("a_bundle_flag", { n: bundle }));
     const img = v.img || it.main_images[0] || null;
     let same = null;
     if (source !== "ref" && img && this.image) {
@@ -155,7 +157,7 @@ export class Hunt {
     }
     const fee = ship ? ship.fee : null;
     return {
-      id: it.id, title: it.title, url, source, rejected: false, img, same, flags, note: ans.note || "",
+      id: it.id, title: it.title, url, source, rejected: false, img, same, flags, note: ans.note || "", bundle,
       variant: v.attrs.join("; ") || "default", price: real(v), shown_price: v.price,
       shipping: fee, ship_company: ship?.company, ship_days: ship?.days,
       total: Math.round((real(v) + (fee || 0)) * 100) / 100, currency: it.currency || this.cur(),
@@ -237,6 +239,8 @@ export class Hunt {
     const byPrice = (a, b) => a.list_price - b.list_price;
     const free = pool.filter((h) => h.free_ship).sort(byPrice), paid = pool.filter((h) => !h.free_ship).sort(byPrice);
     this.log("  " + t("a_split", { f: free.length, p: paid.length, n: PER_VIEW }));
+    const nb = pool.filter((h) => h.bundle).length;
+    if (nb) this.log("  " + t("a_bundle_seen", { n: nb }));
     const look = [...free.slice(0, PER_VIEW), ...paid.slice(0, PER_VIEW)].filter((h) => h.img && !this.thumb.has(h.id));
     let good = 0;
     for (const h of look) {

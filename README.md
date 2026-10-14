@@ -21,6 +21,7 @@ Marketplace search shows the lowest price of *any* variant, and very often that'
 Other traps the agent handles:
 - **Shipping isn't in the listed price.** A $0.90 item with $3 shipping loses to a $2.10 item with free shipping. pricehunt always compares *variant + cheapest shipping*.
 - **"Welcome deal" prices** ($1.09, "max 1 pcs per shopper") apply only to new buyers. They're flagged and counted at the regular price.
+- **Bundle deals.** Some cards in the results are "Bundle deals" ("грн.150 off on 3 items"): an extra discount only if you order at least 3 *different* bundle items. pricehunt marks them with a BUNDLE DEAL tag instead of mixing them silently with single-item prices.
 - **"Sort by price" isn't trustworthy.** Results come back out of order. Sometimes a sort or filter returns *nothing* on purpose. pricehunt splits and sorts results itself and treats an empty page as a refusal, not as "no products".
 - **Same look, different product.** A photo of a 220 V COB panel with an on-board driver returns DC copper COB chips that look similar. Every candidate photo is compared with your product photo.
 

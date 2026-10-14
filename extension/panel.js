@@ -193,7 +193,8 @@ function log(t) {
 function tagOf(c) {
   if (c.source === "ref") return `<span class="tag ref">${t("tag_ref")}</span>`;
   const tier = c.tier === 0 ? `<span class="tag t0">${t("tag_exact")}</span>` : c.tier === 1 ? `<span class="tag t1">${t("tag_similar")}</span>` : `<span class="tag t2">${t("tag_other")}</span>`;
-  return (c.source === "human" ? `<span class="tag human">${t("tag_human")}</span>` : "") + tier;
+  return (c.source === "human" ? `<span class="tag human">${t("tag_human")}</span>` : "") + tier +
+    (c.bundle ? `<span class="tag bundle">${t("tag_bundle")}</span>` : "");
 }
 
 function render(s) {
