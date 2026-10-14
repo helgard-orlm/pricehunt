@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "__MSG_ext_name__",
   "short_name": "pricehunt",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "__MSG_ext_desc__",
   "permissions": [
     "tabs",

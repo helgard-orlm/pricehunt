@@ -90,7 +90,8 @@ export function itemFromRaw(pid, raw) {
 /** Выдача поиска: сначала просто скачать с куки пользователя, не вышло — открыть вкладкой. */
 export async function search(query, { sort = "default", page = 1 } = {}, hooks = {}) {
   await polite();
-  const q = encodeURIComponent(query.trim().replace(/\s+/g, "-"));
+  // «/» и прочие знаки в пути ломают поиск (EU/US/UK -> 302 и 0 товаров, замер 14.10) — оставляем буквы, цифры, точку
+  const q = encodeURIComponent(query.replace(/[^\p{L}\p{N}.]+/gu, " ").trim().replace(/\s+/g, "-"));
   const url = `https://www.aliexpress.com/w/wholesale-${q}.html?SortType=${sort}&page=${page}`;
   try {
     const r = await fetch(url, { credentials: "include" });

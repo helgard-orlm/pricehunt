@@ -15,7 +15,9 @@ export const SAME_MIN = 0.3;      // ниже — «другой», чем об�
 export const EXACT_MIN = 0.7;     // от этого — «точно такой»; лучшим может быть только он
 const FREE_LEVELS = 3, FATIGUE_LIMIT = 3, MAX_LEVELS = 9;
 const PER_LEVEL = 8;              // сколько карточек открывать за уровень (helgard открывает ~10)
-const PER_VIEW = 5;               // сколько самых дешёвых проверять в каждой части выдачи
+const PER_VIEW = 5;               // без характеристики в названии: сколько самых дешёвых проверять в каждой части выдачи
+const LOOK_MAX = 12;              // с характеристикой: все подходящие дешевле образца, но не больше стольких на часть
+const THUMB_MIN = 0.5;            // миниатюра «та же модель» — открыть
 const TIME_BUDGET = 20 * 60 * 1000;
 
 const SPEC_RE = /(\d+(?:[.,]\d+)?)\s*(w|mah|mm|cm|inch|in|gb|tb|ah)\b/gi;   // напряжение не жёстко: «200-240V» ≠ «220V»
@@ -169,9 +171,8 @@ export class Hunt {
     const img = v.img || it.main_images[0] || null;
     let same = null, model = null;
     if (source !== "ref" && img && this.image) {
-      same = this.thumbFor(it.id);   // миниатюра уже дала уверенное «да» — второй раз не сравниваем
-      if (same == null || same < 0.99) same = await this.sameAsRef(img);
-      if (same == null || same >= SAME_MIN) model = await this.sameModelAsRef(img);
+      model = await this.sameModelAsRef(img);                  // по фото подошедшего варианта
+      if (model == null || model < EXACT_MIN) same = await this.sameAsRef(img);
       if (same != null && same < SAME_MIN) {
         const diff = await this.model.ask("Image 1 is what the shopper wants, image 2 is an offer. In max 15 words: the main difference?",
           ["data:image/jpeg;base64," + this.image, img], 50).catch(() => "");
@@ -263,7 +264,9 @@ export class Hunt {
   }
 
   async pick(hits) {
-    const pool = hits.filter((h) => !this.checked.has(h.id));
+    // всё увиденное, что ещё не открыто (14.10: находка helgard пришла на 1-м месте, её пропустили, и на уровнях 2 и 5 она
+    // уже считалась «виденной» — к ней не вернулись)
+    const pool = [...this.seen.values()].filter((h) => !this.checked.has(h.id));
     const byPrice = (a, b) => a.list_price - b.list_price;
     const free = pool.filter((h) => h.free_ship).sort(byPrice), paid = pool.filter((h) => !h.free_ship).sort(byPrice);
     this.log("  " + t("a_split", { f: free.length, p: paid.length, n: PER_VIEW }));
@@ -273,21 +276,23 @@ export class Hunt {
     // другие мощности и цены для новичков (14.10: находка helgard стояла 13-й среди платной доставки, впереди — 20W/30W/кабели)
     const want = this.pickSpecs();
     const fits = (h) => want.every((tok) => hasSpec(h.title, tok));
+    const limit = this.refEval ? this.refEval.total : Infinity;   // дороже образца сравнивать незачем
+    const fresh = (h) => !this.thumb.has(h.id);
     const view = (part) => {
-      if (!want.length) return part.slice(0, PER_VIEW);
-      const yes = part.filter(fits), no = part.filter((h) => !fits(h));
-      return [...yes.slice(0, PER_VIEW), ...no.slice(0, Math.max(0, PER_VIEW - yes.length, 1))];
+      if (!want.length) return part.filter(fresh).slice(0, PER_VIEW);
+      const yes = part.filter((h) => fits(h) && fresh(h) && h.list_price < limit), no = part.filter((h) => !fits(h) && fresh(h));
+      return [...yes.slice(0, LOOK_MAX), ...no.slice(0, Math.max(0, PER_VIEW - yes.length, 1))];
     };
     if (want.length) this.log("  " + t("a_spec_first", { s: want.map((x) => x[0] + x[1].toUpperCase()).join(" "), n: pool.filter(fits).length, m: pool.length }));
     const look = [...view(free), ...view(paid)].filter((h) => h.img && !this.thumb.has(h.id));
     let good = 0;
     for (const h of look) {
       if (this.cancelled) break;
-      const p = await this.sameAsRef(h.img);
-      if (p != null) { this.thumb.set(h.id, p); if (p >= EXACT_MIN) good++; }
+      const p = await this.sameModelAsRef(h.img);       // строго: та же модель (тип пропускал чужие модели)
+      if (p != null) { this.thumb.set(h.id, p); if (p >= THUMB_MIN) good++; }
     }
     if (look.length) this.log("  " + t("a_thumbs", { n: look.length, g: good }));
-    const exact = [...this.thumb].filter(([id, p]) => p >= EXACT_MIN && !this.checked.has(id) && this.seen.has(id))
+    const exact = [...this.thumb].filter(([id, p]) => p >= THUMB_MIN && !this.checked.has(id) && this.seen.has(id))
       .map(([id]) => this.seen.get(id)).sort(byPrice);
     const pick = exact.slice(0, PER_LEVEL);
     this.tr("pick", { pool: pool.length, free: free.length, paid: paid.length, want: want.map((x) => x.join("")),
@@ -367,7 +372,7 @@ export class Hunt {
         for (const x of h) if (!this.seen.has(x.id)) this.seen.set(x.id, x);
         this.log("  " + t("a_found", { d: desc, n: h.length, k: fresh.length }));
         this.tr("search", { level: n, desc, n: h.length, fresh: fresh.length,
-          items: h.map((x) => [x.id, x.list_price, x.free_ship ? "free" : "paid", x.welcome ? "welcome" : "", x.bundle ? "bundle" : "", x.title.slice(0, 80)]) });
+          items: h.map((x) => [x.id, x.list_price, x.free_ship ? "free" : "paid", x.welcome ? "welcome" : "", x.bundle ? "bundle" : "", x.title.slice(0, 80), x.img]) });
         hits.push(...fresh);
       }
       const pick = this.cancelled ? [] : await this.pick(hits);
