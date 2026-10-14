@@ -203,11 +203,14 @@ async function sendTrace() {
   if (!hunt) return;
   let url = "";
   try { url = (await api.storage.local.get("debugUrl")).debugUrl || ""; } catch {}
-  if (!url) return;
+  if (!url) { $("dbgstat").textContent = t("dbg_off"); return; }
   huntId = huntId || new Date().toISOString().replace(/[:.]/g, "-") + "_" + (product?.id || "x");
   const body = { id: huntId, version: api.runtime.getManifest().version, lang: getLang(), url: product ? `https://www.aliexpress.com/item/${product.id}.html` : null,
                  lines: logLines, trace: hunt.trace, verdict: $("verdict").textContent };
-  try { await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); } catch {}
+  try {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    $("dbgstat").textContent = r.ok ? t("dbg_sent", { n: hunt.trace.length }) : t("dbg_fail", { e: "HTTP " + r.status });
+  } catch (e) { $("dbgstat").textContent = t("dbg_fail", { e: e.message }); }
 }
 
 function log(t) {

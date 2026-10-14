@@ -5,6 +5,7 @@ export const LANGS = { en: "English", ru: "Русский", uk: "Українс�
 
 const D = {
   en: {
+    dbg_sent: "developer log sent ✓ ({n} events)", dbg_fail: "developer log NOT sent: {e}", dbg_off: "developer log is off (no address in ⚙)",
     dbg_label: "Developer log (optional)", dbg_hint: "If set, every search sends its detailed log to this address. Leave empty: nothing is sent anywhere.",
     copy_log: "Copy log and results", copied: "Copied ✓",
     same_model: "same model {p}",
@@ -72,6 +73,7 @@ const D = {
     captcha_timeout: "captcha not solved within 5 minutes", model_http: "the model answered {s}: {t}",
   },
   ru: {
+    dbg_sent: "журнал для разработчика отправлен ✓ ({n} событий)", dbg_fail: "журнал НЕ отправлен: {e}", dbg_off: "журнал для разработчика выключен (нет адреса в ⚙)",
     dbg_label: "Журнал для разработчика (необязательно)", dbg_hint: "Если указан, каждый поиск отправляет подробный журнал на этот адрес. Пусто — ничего никуда не уходит.",
     copy_log: "Скопировать журнал и результаты", copied: "Скопировано ✓",
     same_model: "та же модель {p}",
@@ -139,6 +141,7 @@ const D = {
     captcha_timeout: "капча не решена за 5 минут", model_http: "модель ответила {s}: {t}",
   },
   uk: {
+    dbg_sent: "журнал для розробника надіслано ✓ ({n} подій)", dbg_fail: "журнал НЕ надіслано: {e}", dbg_off: "журнал для розробника вимкнено (немає адреси в ⚙)",
     dbg_label: "Журнал для розробника (необов\'язково)", dbg_hint: "Якщо вказано, кожен пошук надсилає докладний журнал на цю адресу. Порожньо — нічого нікуди не йде.",
     copy_log: "Скопіювати журнал і результати", copied: "Скопійовано ✓",
     same_model: "та сама модель {p}",

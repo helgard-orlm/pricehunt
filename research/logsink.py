@@ -36,8 +36,9 @@ class H(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_response(400); self._cors(); self.end_headers(); self.wfile.write(str(e).encode()[:300])
 
-    def log_message(self, *a):
-        pass
+    def log_message(self, fmt, *a):
+        # каждая попытка (и OPTIONS) — в журнал службы: видно, доходит ли браузер вообще
+        print(time.strftime("%H:%M:%S"), self.client_address[0], fmt % a, flush=True)
 
 
 ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
