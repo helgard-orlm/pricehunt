@@ -13,6 +13,8 @@ import ali
 import models
 
 SAME_MIN = 0.3          # ниже — «не такой, как на фото пользователя»
+MATCH_MIN = 0.7         # выше — «точное совпадение»: его название идёт в поисковые запросы
+THUMBS_PER_LEVEL = 12   # сколько миниатюр выдачи сравнивать с образцом за уровень
 FREE_LEVELS = 3
 FATIGUE_LIMIT = 3
 MAX_LEVELS = 9
@@ -46,6 +48,9 @@ class Hunt:
         self.done = False
         self.blocked = False
         self.cancelled = False
+        self.thumb_same = {}        # id -> похожесть миниатюры выдачи на образец
+        self.title_queries = []     # запросы из названий точных совпадений (слова продавцов)
+        self.used_queries = set()
         self.confidence = None
         self.t0 = time.time()
         self.model = models.Model(model, log)
@@ -67,9 +72,11 @@ class Hunt:
         if not it:
             self.log("  ссылка не открылась"); return
         self.ref_raw = it
-        if not self.query:
-            self.query = re.sub(r"\s+", " ", it["title"] or "")[:120]
-            self.log(f"  запрос из названия: «{self.query}»")
+        if len(self.query.split()) < 3:
+            short = " ".join(re.sub(r"\s+", " ", it["title"] or "").split()[:8])
+            self.log(f"  запрос из названия образца: «{short}»" + (f" (твой текст «{self.query}» учту при отборе)" if self.query else ""))
+            self.user_text = self.query
+            self.query = short
         if not self.image and it.get("main_images"):
             import urllib.request
             u = it["main_images"][0]
@@ -116,17 +123,24 @@ class Hunt:
             if not plan:
                 plan.append((f'«{q[0]}»', lambda: self._search(q[0], sort="price_asc")))
         elif n == 2:
-            for qq in q[:3]:
-                if qq.lower() != self.query.lower():
-                    plan.append((f'переформулировка «{qq}», по цене', lambda qq=qq: self._search(qq, sort="price_asc")))
+            for qq in self._fresh(self.title_queries)[:2]:
+                plan.append((f'из названий совпадений «{qq}», по цене', lambda qq=qq: self._search(qq, sort="price_asc")))
+            for qq in self._fresh(q)[:3 - min(2, len(plan))]:
+                plan.append((f'переформулировка «{qq}», по цене', lambda qq=qq: self._search(qq, sort="price_asc")))
         elif n == 3:
             if self.best:
                 plan.append(("похожие по фото лучшего найденного", self._photo_search_best))
-            for qq in q[3:5]:
+            for qq in self._fresh(self.title_queries)[:1]:
+                plan.append((f'из названий совпадений «{qq}»', lambda qq=qq: self._search(qq, sort="price_asc")))
+            for qq in self._fresh(q)[:2]:
                 plan.append((f'переформулировка «{qq}»', lambda qq=qq: self._search(qq, sort="price_asc")))
         else:
+            fresh = self._fresh(self.title_queries)
+            if fresh:
+                qq = fresh[0]
+                plan.append((f'из названий совпадений «{qq}»', lambda qq=qq: self._search(qq, sort="price_asc")))
             k = n - 3
-            src = [self.query] + q if self.query else q
+            src = ([self.query] if self.query else []) + self.title_queries + q
             qq = src[(k - 1) % len(src)]
             page = 2 + (k - 1) // len(src)
             plan.append((f'«{qq}», страница {page}', lambda qq=qq, page=page: self._search(qq, sort="price_asc", page=page)))
@@ -134,8 +148,13 @@ class Hunt:
                 plan.append(("похожие по фото нового лучшего", self._photo_search_best))
         return plan
 
+    def _fresh(self, qs):
+        return [x for x in qs if x and x.lower() not in self.used_queries and x.lower() != self.query.lower()]
+
     def _search(self, q, sort="price_asc", page=1):
         """Поиск идёт тем же путём, что и товары: расширение (браузер пользователя) или робот."""
+        if page == 1:
+            self.used_queries.add(q.lower())
         f = self._fetcher()
         if hasattr(f, "search"):
             return f.search(q, self.ship_to, sort=sort, page=page)
@@ -248,6 +267,41 @@ class Hunt:
                 "currency": it.get("currency") or "USD", "same": same,
                 "n_variants": len(variants)}
 
+    def score_thumbs(self, hits):
+        """Сравнить миниатюры выдачи с образцом (без открытия карточек)."""
+        todo = [h for h in hits if h.get("img") and h["id"] not in self.thumb_same][:THUMBS_PER_LEVEL]
+        for h in todo:
+            if self.cancelled:
+                break
+            p = self.same_as_reference(h["img"])
+            if p is not None:
+                self.thumb_same[h["id"]] = p
+        good = [h for h in todo if self.thumb_same.get(h["id"], 0) >= MATCH_MIN]
+        if todo:
+            self.log(f"  миниатюры: сравнил с твоим фото {len(todo)}, точных совпадений {len(good)}")
+        return good
+
+    def queries_from_matches(self):
+        """Слова, которыми продавцы называют именно этот товар -> новые запросы."""
+        titles = [self.seen[i]["title"] for i, p in self.thumb_same.items() if p >= MATCH_MIN and i in self.seen]
+        titles += [c["title"] for c in self.checked.values() if (c.get("same") or 0) >= MATCH_MIN and c.get("title")]
+        if self.ref_raw and self.ref_raw.get("title"):
+            titles.insert(0, self.ref_raw["title"])
+        titles = list(dict.fromkeys(titles))[:12]
+        if not titles or (len(titles) < 2 and not self.ref_raw) or len(titles) == getattr(self, "_tq_from", 0):
+            return
+        self._tq_from = len(titles)
+        lines = "\n".join(f"- {t[:140]}" for t in titles)
+        qs = self.model.ask_json(
+            "These marketplace listing titles are confirmed (by photo) to be EXACTLY the product the shopper wants:\n"
+            f"{lines}\n\nWrite 3 short English search queries (3-7 words each) built from the words these sellers use most "
+            "often for this product, most likely to find more of the same item first. JSON list of strings.", [], 200, default=[])
+        new = [q.strip() for q in qs if isinstance(q, str) and q.strip()] if isinstance(qs, list) else []
+        new = [q for q in new if q.lower() not in {x.lower() for x in self.title_queries}]
+        if new:
+            self.title_queries += new
+            self.log("  запросы из названий точных совпадений: " + " | ".join(f"«{q}»" for q in new))
+
     def same_as_reference(self, img):
         """Оценка «тот же тип товара, что на фото пользователя» — две картинки рядом, вероятность Yes."""
         try:
@@ -303,6 +357,10 @@ class Hunt:
         if self.ref_url:
             self.load_reference()
         self.understand()
+        if getattr(self, "user_text", ""):
+            self.intent.setdefault("must", []).append(f"shopper also said: {self.user_text}")
+        if self.ref_raw:
+            self.queries_from_matches()
         if self.ref_raw:
             self.ref = self.evaluate(self.ref_raw, source="ref")
             if self.ref:
@@ -323,6 +381,8 @@ class Hunt:
                     h = fn()
                 except Exception as e:
                     self.log(f"  {desc}: ошибка {e}"); continue
+                if "фото" in desc:
+                    for x in h: x["_photo"] = True
                 new = [x for x in h if x["id"] not in self.seen]
                 for x in h: self.seen.setdefault(x["id"], x)
                 self.log(f"  {desc}: {len(h)} товаров, новых {len(new)}")
@@ -330,10 +390,18 @@ class Hunt:
             cand = self.prefilter(hits)
             cand = [c for c in cand if c["id"] not in self.checked]
             cand.sort(key=lambda c: c["list_price"])
+            if self.image and not self.cancelled:
+                photo_hits = [h for h in hits if h.get("_photo")][:8]
+                self.score_thumbs(photo_hits + [c for c in cand if not c.get("_photo")])
+                self.queries_from_matches()
+                cand.sort(key=lambda c: (self.thumb_same.get(c["id"], 0.5) < SAME_MIN, c["list_price"]))
             pick = cand[:PER_LEVEL]
-            self.log(f"  подходят по названию {len(cand)}, открываю {len(pick)} самых дешёвых")
+            self.log(f"  подходят по названию {len(cand)}, открываю {len(pick)}"
+                     + (" (сначала похожие на твоё фото, потом дешёвые)" if self.image else " самых дешёвых"))
             before = self.best["total"] if self.best else math.inf
             _, opened = self.open_items([c["id"] for c in pick])
+            if self.image:
+                self.queries_from_matches()
             self._update_best()
             improved = self.best and self.best["total"] < before - 0.005
             self.levels.append({"n": n, "found": len(hits), "opened": opened,
