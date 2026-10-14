@@ -47,6 +47,7 @@ All numbers below were measured with **MiniCPM-V 4.7 (35B-A3B, Q6_K)** served by
 |---|---|
 | Variant photos: charger / cable / charger+cable / car charger (6 listings, 49 variant photos) | **49 / 49** correct |
 | Match vs a human: COB LED chip 220 V 100 W, author's own manual search | **tie, $3.39**: the agent found exactly the offer in the author's cart |
+| Me vs the agent: Essager 33W GaN charger (black, EU plug), starting from a $12.43 listing | agent found **$8.42** for the same model. My own manual find was $8.89 |
 | ESP-01 programmer adapter, starting from a $2.16 listing | agent found **$0.70** (same board, 97% photo match) in 301 s. ⚠ Both prices were computed before the Choice shipping fix (v1.3.3), which may have added $0.49 that the site doesn't charge. Re-check pending. |
 
 What is **not** measured yet:
