@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pricehunt</title>
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<header>
+  <div><b>pricehunt</b> <span class="mute">тот же товар — дешевле</span></div>
+  <button class="icon" id="gear" title="Модель">⚙</button>
+</header>
+
+<section id="setup" hidden>
+  <h2>Модель агента</h2>
+  <p class="mute small">Агент думает и смотрит на фото с помощью открытой модели на твоём компьютере (Ollama) или по любому адресу в формате OpenAI. Нужна модель, которая видит картинки.</p>
+  <label>Адрес</label>
+  <input id="base" placeholder="http://localhost:11434">
+  <button class="ghost" id="probe">Проверить</button>
+  <div id="probeout" class="small"></div>
+  <label>Модель</label>
+  <select id="modelsel"></select>
+  <details class="small"><summary>ключ API (если нужен)</summary><input id="key" placeholder="необязательно"></details>
+  <button id="savecfg">Сохранить</button>
+  <div class="help small" id="help" hidden>
+    <b>Нет Ollama?</b> Скачай с <a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com/download</a>, установи и выполни в терминале одну команду, например:
+    <code>ollama pull qwen2.5vl:7b</code>
+    Подойдёт любая модель со значком «vision». Мы проверяли MiniCPM-V 4.7 (49 из 49 фото вариантов верно) и Gemma 4 12B (45 из 49).
+  </div>
+</section>
+
+<section id="product">
+  <div id="noproduct" class="mute">Открой страницу товара на AliExpress — здесь появятся его варианты.</div>
+  <div id="pcard" hidden>
+    <div class="row">
+      <img id="pimg" alt="">
+      <div class="grow"><div id="ptitle" class="ptitle"></div><div id="pprice" class="small"></div></div>
+    </div>
+    <div id="groups"></div>
+    <button id="go">Найти дешевле такой же</button>
+    <button class="ghost" id="stop" hidden>Стоп</button>
+    <div class="mute small">Выбранный вариант — требование: агент ищет именно такой и пытается побить его цену. Цены и доставка — по настройкам твоего AliExpress.</div>
+  </div>
+</section>
+
+<section id="run" hidden>
+  <div class="stats">
+    <div><div class="mute small">уровень</div><div id="slevel" class="num">—</div></div>
+    <div><div class="mute small">утомление</div><div id="sfat" class="num">—</div></div>
+    <div><div class="mute small">видел / открыл</div><div id="sseen" class="num">—</div></div>
+    <div><div class="mute small">время</div><div id="stime" class="num">—</div></div>
+  </div>
+  <div id="captcha" class="warn" hidden>🧩 AliExpress показал капчу — сдвинь ползунок во вкладке, агент подождёт.</div>
+  <div id="verdict"></div>
+  <details><summary class="mute small">журнал агента</summary><div id="log"></div></details>
+</section>
+
+<section id="results" hidden>
+  <div id="list"></div>
+</section>
+
+<section id="mine" hidden>
+  <h2>Мои находки</h2>
+  <p class="mute small">Вставь ссылки на товары, которые нашёл сам — они пройдут ту же проверку, и будет видно, кто нашёл дешевле.</p>
+  <textarea id="minetext" placeholder="https://www.aliexpress.com/item/…"></textarea>
+  <button class="ghost" id="cmp">Сравнить с агентом</button>
+</section>
+
+<script type="module" src="panel.js"></script>
+</body>
+</html>
