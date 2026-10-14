@@ -7,7 +7,7 @@
 // Проценты — вероятность ответа Yes у модели (как у моделей класса Jev); это оценка, не откалиброванная вероятность.
 
 import * as browse from "./browse.js";
-import { toJpegB64 } from "./model.js";
+import { toJpegB64, imgHash, imgKey, hamming } from "./model.js";
 import { t } from "./i18n.js";
 import { cheapestShip } from "./parse.js";
 
@@ -18,6 +18,8 @@ const PER_LEVEL = 8;              // сколько карточек откры�
 const PER_VIEW = 5;               // без характеристики в названии: сколько самых дешёвых проверять в каждой части выдачи
 const LOOK_MAX = 20;              // с характеристикой: все подходящие дешевле образца, но не больше стольких на часть
 const THUMB_MIN = 0.5;            // миниатюра «та же модель» — открыть
+const PHOTO_D = 2;                // отпечатки фото ближе этого (из 256 бит) = то же фото
+const PHOTO_SAME_MIN = 0.5;       // «то же фото» засчитывается, только если и «тот же тип» не ниже
 const TIME_BUDGET = 20 * 60 * 1000;
 
 const SPEC_RE = /(\d+(?:[.,]\d+)?)\s*(w|mah|mm|cm|inch|in|gb|tb|ah)\b/gi;   // напряжение не жёстко: «200-240V» ≠ «220V»
@@ -115,8 +117,54 @@ export class Hunt {
       ["data:image/jpeg;base64," + this.image, img]).catch(() => null);
   }
 
+  // ---------- общие фото: продавцы копируют фото друг у друга -> то же фото = тот же товар ----------
+  // Строгий вопрос «та же модель» ошибается, когда образец снят иначе (1005008033832703: 0.028).
+  // Замер 14.10 на 15 Essager: у 4 той же модели 2–3 общих товарных фото с образцом, у 10 чужих — 0
+  // (баннеры бренда общие и у чужих -> их отсеивает вопрос «товар — главное на фото?»).
+  async buildPhotos(refImg) {
+    this.photos = [];
+    const urls = [refImg, this.ref.variant?.img, ...(this.ref.item.main_images || []).slice(0, 6)].filter(Boolean);
+    const seen = new Set();
+    for (const u of urls) {
+      if (this.cancelled) break;
+      const k = imgKey(u);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const prod = u === refImg ? 1 : await this.model.yesProb(
+        "Is a physical product the main subject of this photo, large and clearly visible — not an advertising banner, " +
+        "a chip/technology illustration, a diagram, a size chart or a text list? Answer Yes or No.", [u]).catch(() => null);
+      if (prod == null || prod < 0.5) continue;
+      const h = await imgHash(u);
+      if (h) this.photos.push({ k, h });
+    }
+    this.log(t("a_photos", { n: this.photos.length }));
+  }
+
+  async addPhoto(u) {                       // фото варианта подтверждённого «точно такого» — тоже образец
+    if (!u || !this.photos) return;
+    const k = imgKey(u);
+    if (this.photos.some((p) => p.k === k)) return;
+    const h = await imgHash(u);
+    if (h) this.photos.push({ k, h, from: "match" });
+  }
+
+  async photoHits(urls) {
+    if (!this.photos?.length) return 0;
+    const hit = new Set();
+    for (const u of urls.filter(Boolean)) {
+      const k = imgKey(u);
+      const same = this.photos.findIndex((p) => p.k === k);
+      if (same >= 0) { hit.add(same); continue; }
+      const h = await imgHash(u);
+      if (!h) continue;
+      this.photos.forEach((p, i) => { if (hamming(p.h, h) <= PHOTO_D) hit.add(i); });
+    }
+    return hit.size;
+  }
+
   tier(c) {
     if (c.source === "ref") return 0;
+    if (c.photo) return 0;
     if (c.model != null) return c.model >= EXACT_MIN ? 0 : (c.same == null || c.same >= SAME_MIN) ? 1 : 2;
     if (c.same == null) return 1;
     return c.same >= SAME_MIN ? 1 : 2;
@@ -169,10 +217,15 @@ export class Hunt {
     const bundle = this.seen.get(it.id)?.bundle || null;     // метка «Пропозиції комплектів» с карточки выдачи
     if (bundle && source !== "ref") flags.push(t("a_bundle_flag", { n: bundle }));
     const img = v.img || it.main_images[0] || null;
-    let same = null, model = null;
+    let same = null, model = null, photo = 0;
     if (source !== "ref" && img && this.image) {
       model = await this.sameModelAsRef(img);                  // по фото подошедшего варианта
       if (model == null || model < EXACT_MIN) same = await this.sameAsRef(img);
+      if (model != null && model >= EXACT_MIN) await this.addPhoto(img);
+      else if (same != null && same >= PHOTO_SAME_MIN) {
+        photo = await this.photoHits([img, ...(it.main_images || []).slice(0, 6)]);
+        if (photo) flags.push(t("a_same_photo", { n: photo }));
+      }
       if (same != null && same < SAME_MIN) {
         const diff = await this.model.ask("Image 1 is what the shopper wants, image 2 is an offer. In max 15 words: the main difference?",
           ["data:image/jpeg;base64," + this.image, img], 50).catch(() => "");
@@ -181,7 +234,7 @@ export class Hunt {
     }
     const { ship, fee } = cheapestShip(it.shipping, real(v));
     return {
-      id: it.id, title: it.title, url, source, rejected: false, img, same, model, flags, note: ans.note || "", bundle,
+      id: it.id, title: it.title, url, source, rejected: false, img, same, model, photo, flags, note: ans.note || "", bundle,
       variant: v.attrs.join("; ") || "default", price: real(v), shown_price: v.price,
       shipping: fee, ship_company: ship?.company, ship_days: ship?.days,
       total: Math.round((real(v) + (fee || 0)) * 100) / 100, currency: it.currency || this.cur(),
@@ -208,7 +261,7 @@ export class Hunt {
       this.tr("card", { id: pid, source, title: it.title, opened_as: it.variants.length + " variants",
         variants: it.variants.slice(0, 40).map((v) => [v.attrs.join("; "), v.price, v.welcome_deal ? 1 : 0, v.salable === false ? 0 : 1]),
         shipping: it.shipping, result: ev ? { rejected: ev.rejected, note: ev.note, variant: ev.variant, price: ev.price, shipping: ev.shipping,
-          total: ev.total, same_type: ev.same, same_model: ev.model, tier: ev.rejected ? null : this.tier(ev), flags: ev.flags, img: ev.img } : null });
+          total: ev.total, same_type: ev.same, same_model: ev.model, photo: ev.photo, tier: ev.rejected ? null : this.tier(ev), flags: ev.flags, img: ev.img } : null });
       if (!ev) continue;
       this.checked.set(pid, ev);
       if (ev.rejected) this.log(`  ✗ ${it.title.slice(0, 60)} — ${ev.note}`);
@@ -288,7 +341,7 @@ export class Hunt {
     let good = 0;
     for (const h of look) {
       if (this.cancelled) break;
-      const p = await this.sameModelAsRef(h.img);       // строго: та же модель (тип пропускал чужие модели)
+      const p = (await this.photoHits([h.img])) ? 1 : await this.sameModelAsRef(h.img);   // то же фото, что у образца -> открыть; иначе строго «та же модель»
       if (p != null) { this.thumb.set(h.id, p); if (p >= THUMB_MIN) good++; }
     }
     if (look.length) this.log("  " + t("a_thumbs", { n: look.length, g: good }));
@@ -354,6 +407,7 @@ export class Hunt {
       ref_photo: img, user_photo: !!this.ref.image, model: this.model.label(), currency: this.cur() });
     this.image = img ? await toJpegB64(img) : null;
     if (!this.image) throw new Error(t("a_no_photo"));
+    await this.buildPhotos(img);
     await this.understand();
     this.refEval = await this.evaluate(this.ref.item, "ref");
     this.tr("ref_eval", { result: this.refEval, shipping: this.ref.item.shipping });
@@ -406,7 +460,7 @@ export class Hunt {
     let quiet = 0;
     for (const lv of [...this.levels].reverse()) { if (lv.improved) break; quiet++; }
     const table = rows.map((c, i) => `#${i + 1} ${c.total} total (item ${c.price} + shipping ${c.shipping}) — variant «${c.variant}» — ${c.title.slice(0, 90)}` +
-      (c.model != null ? ` — same model as the reference: ${Math.round(c.model * 100)}%` : c.same != null ? ` — looks like the reference: ${Math.round(c.same * 100)}%` : "") + (c.source === "ref" ? " — the shopper's own page" : "") +
+      (c.photo ? ` — the seller uses the same product photo as the reference (${c.photo})` : c.model != null ? ` — same model as the reference: ${Math.round(c.model * 100)}%` : c.same != null ? ` — looks like the reference: ${Math.round(c.same * 100)}%` : "") + (c.source === "ref" ? " — the shopper's own page" : "") +
       (c.flags.length ? ` — warnings: ${c.flags.join("; ")}` : "")).join("\n");
     const head = `A shopper wants: ${this.intent.what}. Must have: ${this.intent.must.join(", ")}.\nChecked offers:\n${table}\n` +
       `Search depth: ${this.levels.length} levels, ${this.seen.size} listings seen, ${this.checked.size} opened; the last ${quiet} levels found nothing cheaper.` +

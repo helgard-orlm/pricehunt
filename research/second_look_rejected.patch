@@ -1,0 +1,186 @@
+diff --git a/extension/lib/agent.js b/extension/lib/agent.js
+index fc69df0..d30a41f 100644
+--- a/extension/lib/agent.js
++++ b/extension/lib/agent.js
+@@ -18,8 +18,12 @@ const PER_LEVEL = 8;              // сколько карточек откры
+ const PER_VIEW = 5;               // без характеристики в названии: сколько самых дешёвых проверять в каждой части выдачи
+ const LOOK_MAX = 20;              // с характеристикой: все подходящие дешевле образца, но не больше стольких на часть
+ const THUMB_MIN = 0.5;            // миниатюра «та же модель» — открыть
++const SECOND_MIN = 0.5;           // второй шанс: «тот же тип» и «та же модель по двум ракурсам» от этого
+ const TIME_BUDGET = 20 * 60 * 1000;
+ 
++const SINGLE_Q = "Does this photo show exactly ONE product item on its own (not several sizes or variants side by side, " +
++  "not a scene with other objects, not mostly text or a diagram)? Answer Yes or No.";
++
+ const SPEC_RE = /(\d+(?:[.,]\d+)?)\s*(w|mah|mm|cm|inch|in|gb|tb|ah)\b/gi;   // напряжение не жёстко: «200-240V» ≠ «220V»
+ 
+ function specTokens(text) {
+@@ -115,8 +119,65 @@ export class Hunt {
+       ["data:image/jpeg;base64," + this.image, img]).catch(() => null);
+   }
+ 
++  // ---------- второй шанс для «не та модель» ----------
++  // Образец снят сбоку, предложение спереди (или две расцветки рядом) -> строгий вопрос говорит «нет» той же модели
++  // (14.10, 1005008033832703: 0.016). Второй ракурс образца из галереи возвращает её (0.64), но пропускает и похожую
++  // модель с другими портами (C+C вместо C+A: 0.92) -> дополнительно сверяем в коде список разъёмов.
++  // Замер на 17 зарядках Essager: было «та же» 5/6, чужих 0/11; со вторым шансом 6/6 и 0/11.
++  refView2() {
++    if (!this._view2) this._view2 = (async () => {
++      const first = String(this.refImgUrl || "").split("_")[0];
++      const gallery = (this.ref.item.main_images || []).slice(0, 6).filter((u) => String(u).split("_")[0] !== first);
++      let best = null;
++      for (const u of gallery) {
++        if (this.cancelled) break;
++        // не «одно изделие»: в галереях почти нет одиночных фото (у Essager 0 из 6), зато есть вид спереди
++        const p = await this.model.yesProb(
++          "Image 1 is the product the shopper wants. Does image 2 show the same product (any colour) clearly, with its front side, ports, " +
++          "buttons or display visible — not a different product, not mostly text, not a scene where the product is tiny? Answer Yes or No.",
++          ["data:image/jpeg;base64," + this.image, u]).catch(() => null);
++        if (p != null && (!best || p > best.p)) best = { u, p };
++      }
++      return best && best.p >= 0.5 ? best.u : null;
++    })();
++    return this._view2;
++  }
++
++  async ports(img) {
++    const j = await this.model.askJson(
++      "Look at the main product in the photo (if several identical units in different colours are shown, describe one). " +
++      "List every connector, port, socket, pin header, terminal and button you can see on it, with how many of each. " +
++      "Answer only JSON like {\"USB-C\": 1, \"USB-A\": 1}; use {} if there are none.", [img], 120, null).catch(() => null);
++    if (!j || typeof j !== "object" || Array.isArray(j)) return null;
++    const out = {};
++    for (const [k, v] of Object.entries(j)) {
++      const key = String(k).toLowerCase().replace(/[^a-z0-9]/g, "");
++      if (!key || /plug/.test(key)) continue;                        // вилку проверяет код по варианту; на фото её часто не видно
++      out[key] = (out[key] || 0) + (Number(v) || 0);
++    }
++    return out;
++  }
++
++  async secondLook(img) {
++    const view2 = await this.refView2();
++    if (!view2) return { ok: false, why: "no second view" };
++    const p = await this.model.yesProb(
++      "Images 1 and 2 show the exact product the shopper wants (the same item, two views). Image 3 is a marketplace offer " +
++      "(it may show several items, colours or plug types). Is the product in image 3 the SAME MODEL as in images 1-2 — same body shape " +
++      "and design details, same ports and their layout, same display or lights, same printed power rating — not just a similar product " +
++      "of the same kind or another model of the same brand? Ignore colour, background, advertising text and plug type. Answer Yes or No.",
++      ["data:image/jpeg;base64," + this.image, view2, img]).catch(() => null);
++    if (p == null || p < SECOND_MIN) return { ok: false, p, view2 };
++    if (!this._refPorts) this._refPorts = this.ports("data:image/jpeg;base64," + this.image);
++    const a = await this._refPorts, b = await this.ports(img);
++    const key = (o) => JSON.stringify(Object.entries(o || {}).filter(([, n]) => n > 0).sort());
++    const ok = !!a && !!b && Object.keys(a).length > 0 && key(a) === key(b);
++    return { ok, p, view2, ports_ref: a, ports: b };
++  }
++
+   tier(c) {
+     if (c.source === "ref") return 0;
++    if (c.second?.ok) return 0;
+     if (c.model != null) return c.model >= EXACT_MIN ? 0 : (c.same == null || c.same >= SAME_MIN) ? 1 : 2;
+     if (c.same == null) return 1;
+     return c.same >= SAME_MIN ? 1 : 2;
+@@ -169,10 +230,14 @@ export class Hunt {
+     const bundle = this.seen.get(it.id)?.bundle || null;     // метка «Пропозиції комплектів» с карточки выдачи
+     if (bundle && source !== "ref") flags.push(t("a_bundle_flag", { n: bundle }));
+     const img = v.img || it.main_images[0] || null;
+-    let same = null, model = null;
++    let same = null, model = null, second = null;
+     if (source !== "ref" && img && this.image) {
+       model = await this.sameModelAsRef(img);                  // по фото подошедшего варианта
+       if (model == null || model < EXACT_MIN) same = await this.sameAsRef(img);
++      if (model != null && model < EXACT_MIN && same != null && same >= SECOND_MIN) {
++        second = await this.secondLook(img);
++        if (second.ok) flags.push(t("a_second_look", { p: Math.round(second.p * 100) }));
++      }
+       if (same != null && same < SAME_MIN) {
+         const diff = await this.model.ask("Image 1 is what the shopper wants, image 2 is an offer. In max 15 words: the main difference?",
+           ["data:image/jpeg;base64," + this.image, img], 50).catch(() => "");
+@@ -181,7 +246,7 @@ export class Hunt {
+     }
+     const { ship, fee } = cheapestShip(it.shipping, real(v));
+     return {
+-      id: it.id, title: it.title, url, source, rejected: false, img, same, model, flags, note: ans.note || "", bundle,
++      id: it.id, title: it.title, url, source, rejected: false, img, same, model, second, flags, note: ans.note || "", bundle,
+       variant: v.attrs.join("; ") || "default", price: real(v), shown_price: v.price,
+       shipping: fee, ship_company: ship?.company, ship_days: ship?.days,
+       total: Math.round((real(v) + (fee || 0)) * 100) / 100, currency: it.currency || this.cur(),
+@@ -208,7 +273,7 @@ export class Hunt {
+       this.tr("card", { id: pid, source, title: it.title, opened_as: it.variants.length + " variants",
+         variants: it.variants.slice(0, 40).map((v) => [v.attrs.join("; "), v.price, v.welcome_deal ? 1 : 0, v.salable === false ? 0 : 1]),
+         shipping: it.shipping, result: ev ? { rejected: ev.rejected, note: ev.note, variant: ev.variant, price: ev.price, shipping: ev.shipping,
+-          total: ev.total, same_type: ev.same, same_model: ev.model, tier: ev.rejected ? null : this.tier(ev), flags: ev.flags, img: ev.img } : null });
++          total: ev.total, same_type: ev.same, same_model: ev.model, second: ev.second, tier: ev.rejected ? null : this.tier(ev), flags: ev.flags, img: ev.img } : null });
+       if (!ev) continue;
+       this.checked.set(pid, ev);
+       if (ev.rejected) this.log(`  ✗ ${it.title.slice(0, 60)} — ${ev.note}`);
+@@ -330,9 +395,7 @@ export class Hunt {
+       const v = this.ref.variant ? this.ref.variant.attrs.map((a) => a.split(":").pop().trim()).join("; ") : "";
+       let best = null;
+       for (let i = 0; i < gallery.length && !this.cancelled; i++) {
+-        const p = await this.model.yesProb(
+-          "Does this photo show exactly ONE product item on its own (not several sizes or variants side by side, " +
+-          "not a scene with other objects, not mostly text or a diagram)?" + (v ? ` The wanted variant is: ${v}.` : "") + " Answer Yes or No.",
++        const p = await this.model.yesProb(SINGLE_Q.replace(" Answer Yes or No.", (v ? ` The wanted variant is: ${v}.` : "") + " Answer Yes or No."),
+           [gallery[i]]).catch(() => null);
+         if (p != null && (!best || p > best.p)) best = { i, p };
+       }
+@@ -350,6 +413,7 @@ export class Hunt {
+   async run() {
+     this.log(t("a_model", { m: this.model.label() }));
+     const img = await this.refPhoto();
++    this.refImgUrl = img;
+     this.tr("start", { ref_id: this.ref.id, title: this.ref.item.title, variant: this.ref.variant ? this.ref.variant.attrs : null,
+       ref_photo: img, user_photo: !!this.ref.image, model: this.model.label(), currency: this.cur() });
+     this.image = img ? await toJpegB64(img) : null;
+@@ -406,7 +470,7 @@ export class Hunt {
+     let quiet = 0;
+     for (const lv of [...this.levels].reverse()) { if (lv.improved) break; quiet++; }
+     const table = rows.map((c, i) => `#${i + 1} ${c.total} total (item ${c.price} + shipping ${c.shipping}) — variant «${c.variant}» — ${c.title.slice(0, 90)}` +
+-      (c.model != null ? ` — same model as the reference: ${Math.round(c.model * 100)}%` : c.same != null ? ` — looks like the reference: ${Math.round(c.same * 100)}%` : "") + (c.source === "ref" ? " — the shopper's own page" : "") +
++      (c.second?.ok ? ` — same model as the reference (second look, same connectors): ${Math.round(c.second.p * 100)}%` : c.model != null ? ` — same model as the reference: ${Math.round(c.model * 100)}%` : c.same != null ? ` — looks like the reference: ${Math.round(c.same * 100)}%` : "") + (c.source === "ref" ? " — the shopper's own page" : "") +
+       (c.flags.length ? ` — warnings: ${c.flags.join("; ")}` : "")).join("\n");
+     const head = `A shopper wants: ${this.intent.what}. Must have: ${this.intent.must.join(", ")}.\nChecked offers:\n${table}\n` +
+       `Search depth: ${this.levels.length} levels, ${this.seen.size} listings seen, ${this.checked.size} opened; the last ${quiet} levels found nothing cheaper.` +
+diff --git a/extension/lib/i18n.js b/extension/lib/i18n.js
+index 8c9c125..18e81d1 100644
+--- a/extension/lib/i18n.js
++++ b/extension/lib/i18n.js
+@@ -56,6 +56,7 @@ const D = {
+     a_list_price: "the listing price {p} is for “{v}”, not the wanted item",
+     a_welcome: "{p} is for new buyers only; counting the regular {r}",
+     a_not_like: "not like the reference ({p}%)",
++    a_second_look: "same model on a second look ({p}%): another photo of yours + the same connectors",
+     a_captcha_stop: "⛔ captcha not solved — showing what I checked so far",
+     a_not_opened: "didn't open {id}", a_ok_line: "{t} = {p} + shipping {s}",
+     a_sort_refused: "AliExpress refused to sort — taking the default results and sorting them myself",
+@@ -124,6 +125,7 @@ const D = {
+     a_list_price: "цена в выдаче {p} — это «{v}», не нужный товар",
+     a_welcome: "{p} — только для новых покупателей; считаю по обычной {r}",
+     a_not_like: "не такой, как образец ({p}%)",
++    a_second_look: "та же модель со второго взгляда ({p}%): другое фото образца + те же разъёмы",
+     a_captcha_stop: "⛔ капча не решена — показываю, что успел проверить",
+     a_not_opened: "не открылся {id}", a_ok_line: "{t} = {p} + доставка {s}",
+     a_sort_refused: "AliExpress отказал в сортировке — беру обычную выдачу и сортирую сам",
+@@ -192,6 +194,7 @@ const D = {
+     a_list_price: "ціна у видачі {p} — це «{v}», не потрібний товар",
+     a_welcome: "{p} — лише для нових покупців; рахую за звичайною {r}",
+     a_not_like: "не такий, як зразок ({p}%)",
++    a_second_look: "та сама модель з другого погляду ({p}%): інше фото зразка + ті самі роз'єми",
+     a_captcha_stop: "⛔ капчу не розв'язано — показую, що встиг перевірити",
+     a_not_opened: "не відкрився {id}", a_ok_line: "{t} = {p} + доставка {s}",
+     a_sort_refused: "AliExpress відмовив у сортуванні — беру звичайну видачу й сортую сам",
+diff --git a/extension/panel.js b/extension/panel.js
+index 3b5b74b..779eb1e 100644
+--- a/extension/panel.js
++++ b/extension/panel.js
+@@ -252,7 +252,7 @@ function render(s) {
+     <div class="item${c.tier === 2 ? " dim" : ""}">
+       <a href="${esc(c.url)}" target="_blank" rel="noopener"><img src="${esc(c.img || "")}" alt="" loading="lazy"></a>
+       <div>${tagOf(c)}<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a>
+-        <div class="mute small">${esc(c.variant)}${c.model != null ? " · " + esc(t("same_model", { p: pct(c.model) })) : c.same != null ? " · " + esc(t("like_ref", { p: pct(c.same) })) : ""}</div>
++        <div class="mute small">${esc(c.variant)}${c.second?.ok ? " · " + esc(t("same_model", { p: pct(c.second.p) })) : c.model != null ? " · " + esc(t("same_model", { p: pct(c.model) })) : c.same != null ? " · " + esc(t("like_ref", { p: pct(c.same) })) : ""}</div>
+         ${(c.flags || []).map((f) => `<span class="flag">⚠ ${esc(f)}</span>`).join("")}
+       </div>
+       <div><div class="total">${money(c.total, c.currency)}</div><div class="sub">${money(c.price, c.currency)} + ${money(c.shipping, c.currency)}</div></div>

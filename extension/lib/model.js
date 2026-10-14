@@ -61,17 +61,39 @@ export async function listOpenAI(base, key) {
 // ---------- картинки: всё в JPEG (AliExpress отдаёт AVIF/WebP, не все модели их читают) ----------
 const jpegCache = new Map();
 
+// CDN фото (Akamai) после серии быстрых запросов отвечает 403 text/html с cache-control на год (замер 14.10) ->
+// проверяем статус и тип, при отказе ждём и берём в обход кэша браузера другой размер.
+export async function fetchImage(url) {
+  const sizes = [null, "_220x220.jpg", "_640x640.jpg"];
+  let last;
+  for (let i = 0; i < sizes.length; i++) {
+    let u = url;
+    if (sizes[i]) {
+      u = url.split("?")[0].replace(/(\.(?:jpe?g|png|webp|avif))_.*$/i, "$1");
+      if (!/alicdn|aliexpress-media/.test(u)) u = url;
+      else u += sizes[i];
+      await new Promise((r) => setTimeout(r, 1500 * i));
+    }
+    try {
+      const r = await fetch(u, i ? { cache: "reload" } : {});
+      const b = await r.blob();
+      if (r.ok && b.type.startsWith("image/")) return await createImageBitmap(b);
+      last = new Error(`image ${r.status} ${b.type}`);
+    } catch (e) { last = e; }
+  }
+  throw last;
+}
+
 export async function toJpegB64(src, maxSide = 1024) {
   const key = typeof src === "string" ? src + "|" + maxSide : null;
   if (key && jpegCache.has(key)) return jpegCache.get(key);
-  let blob;
+  let blob, url;
   if (src instanceof Blob) blob = src;
   else {
-    let url = src.startsWith("//") ? "https:" + src : src;
+    url = src.startsWith("//") ? "https:" + src : src;
     if (/alicdn|aliexpress-media/.test(url) && !/_\d+x\d+/.test(url) && !url.includes("?")) url += "_350x350.jpg";
-    blob = await (await fetch(url)).blob();
   }
-  const bmp = await createImageBitmap(blob);
+  const bmp = blob ? await createImageBitmap(blob) : await fetchImage(url);
   const k = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
   const c = new OffscreenCanvas(Math.max(1, Math.round(bmp.width * k)), Math.max(1, Math.round(bmp.height * k)));
   c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
@@ -86,6 +108,48 @@ export async function toJpegB64(src, maxSide = 1024) {
     jpegCache.set(key, b64);
   }
   return b64;
+}
+
+// ---------- отпечаток фото (dHash 16×16 = 256 бит): продавцы копируют фото друг у друга (наблюдение helgard 14.10) ----------
+// Копии одного файла дают 0–1 бит разницы, перерисованные порты на той же сцене — 6 (замер 14.10, Essager C+A против C+C).
+const hashCache = new Map();
+export const imgKey = (u) => String(u || "").replace(/^\/\//, "https://").split("?")[0].replace(/(\.(?:jpe?g|png|webp|avif))_.*$/i, "$1");
+
+export function dhashFromGray(g, w) {      // g: яркости (w+1)×w, по строкам
+  const bits = new Uint8Array(w * w / 8);
+  for (let y = 0; y < w; y++)
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (g[y * (w + 1) + x] > g[y * (w + 1) + x + 1]) bits[i >> 3] |= 1 << (i & 7);
+    }
+  return bits;
+}
+
+export function hamming(a, b) {
+  let n = 0;
+  for (let i = 0; i < a.length; i++) { let v = a[i] ^ b[i]; while (v) { n += v & 1; v >>= 1; } }
+  return n;
+}
+
+export async function imgHash(src, w = 16) {
+  const key = imgKey(src);
+  if (hashCache.has(key)) return hashCache.get(key);
+  const p = (async () => {
+    let url = key;
+    if (/alicdn|aliexpress-media/.test(url)) url += "_350x350.jpg";
+    const bmp = await fetchImage(url);
+    const mid = new OffscreenCanvas(64, 64), mc = mid.getContext("2d");     // в два шага: прямое 350 -> 17 даёт алиасинг
+    mc.imageSmoothingQuality = "high"; mc.drawImage(bmp, 0, 0, 64, 64);
+    const c = new OffscreenCanvas(w + 1, w), cx = c.getContext("2d");
+    cx.imageSmoothingQuality = "high"; cx.drawImage(mid, 0, 0, w + 1, w);
+    const d = cx.getImageData(0, 0, w + 1, w).data, g = new Float32Array((w + 1) * w);
+    for (let i = 0; i < g.length; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+    return dhashFromGray(g, w);
+  })().catch(() => null);
+  if (hashCache.size > 2000) hashCache.clear();
+  hashCache.set(key, p);
+  p.then((h) => { if (!h) hashCache.delete(key); });   // сбой загрузки не запоминаем
+  return p;
 }
 
 export class Model {
