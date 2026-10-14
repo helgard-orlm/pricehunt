@@ -22,6 +22,22 @@ def _pdp_result(text):
     return json.loads(re.sub(r'^[^{]*\(|\)\s*$', '', text.strip()))["data"]["result"]
 
 
+def money(text):
+    """«US $1,234.56», «1 234,56 грн.», «€ 35,69» -> float."""
+    m = re.search(r"\d[\d\s\u00a0\u202f.,]*\d|\d", str(text or ""))
+    if not m:
+        return None
+    t = re.sub(r"[\s\u00a0\u202f]", "", m.group())
+    if "," in t and "." in t:
+        t = t.replace(",", "") if t.rfind(".") > t.rfind(",") else t.replace(".", "").replace(",", ".")
+    elif "," in t:
+        t = t.replace(",", ".") if len(t.split(",")[-1]) <= 2 else t.replace(",", "")
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
 def parse_item(r):
     sku = r["SKU"]
     names = {}
@@ -43,9 +59,9 @@ def parse_item(r):
                     attrs.append(f"{n[0]}: {n[1]}")
                     vimg = vimg or n[2]
         pi = prices.get(sid, {})
-        sale = re.search(r"[\d.]+", (pi.get("salePriceString") or "").replace(",", ""))
+        sale = money(pi.get("salePriceString"))
         variants.append({"sku": sid, "attrs": attrs, "stock": p.get("skuStock"), "salable": p.get("salable"),
-                         "price": float(sale.group()) if sale else None,
+                         "price": sale,
                          "original": (pi.get("originalPrice") or {}).get("value"),
                          "welcome_deal": "welcome" in (banner.get(sid) or ""),
                          "img": vimg or (imgs.get(sid) or [None])[0]})
@@ -55,9 +71,14 @@ def parse_item(r):
         ship.append({"company": b.get("company"), "fee": b.get("displayAmount") if b.get("shippingFee") != "free" else 0.0,
                      "fee_kind": b.get("shippingFee"), "days": [b.get("deliveryDayMin"), b.get("deliveryDayMax")],
                      "ship_to": b.get("shipToCode"), "from": b.get("shipFrom")})
+    cur = None
+    for pi in prices.values():
+        cur = (pi.get("originalPrice") or {}).get("currency")
+        if cur: break
+    cur = cur or next((li.get("bizData", {}).get("displayCurrency") for li in (r.get("SHIPPING") or {}).get("deliveryLayoutInfo", [])), None)
     title = (r.get("PRODUCT_TITLE") or {}).get("text")
     main = ((r.get("HEADER_IMAGE_PC") or {}).get("imagePathList") or [None])
-    return {"title": title, "main_images": main[:6], "variants": variants, "shipping": ship}
+    return {"title": title, "main_images": main[:6], "variants": variants, "shipping": ship, "currency": cur}
 
 
 class Captcha(Exception):

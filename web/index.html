@@ -60,7 +60,18 @@ details summary{cursor:pointer;color:var(--mute)}
 </div>
 
 <div class="card">
-  <label><span class="step">2</span>Что ищем — название и/или фото</label>
+  <label><span class="step">2</span>Кто ищет и откуда смотрит сайт</label>
+  <div class="row">
+    <div><div class="mute" style="font-size:13px">модель агента</div><select id="model"></select>
+      <div id="custom" hidden style="margin-top:6px"><input type="text" id="curl" placeholder="адрес OpenAI-формата, напр. http://host:8000/v1"><input type="text" id="cmodel" placeholder="имя модели" style="margin-top:6px"><input type="text" id="ckey" placeholder="ключ API (если нужен)" style="margin-top:6px"></div></div>
+    <div><div class="mute" style="font-size:13px">страницы товаров открывает</div><select id="fetch"><option value="server">робот на сервере</option><option value="extension">мой браузер (расширение)</option></select>
+      <div id="extst" class="mute" style="font-size:12px;margin-top:4px"></div>
+      <div id="fhint" class="mute" style="font-size:12px;margin-top:4px" hidden>⚠ В этом режиме страна доставки и валюта берутся из настроек <b>твоего</b> AliExpress (в шапке сайта) — выбери их там перед поиском. Поле «Куда доставка» тут цены не меняет.</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <label><span class="step">3</span>Что ищем — название и/или фото</label>
   <div class="row">
     <input type="text" id="q" placeholder="например: 65W USB-C charger, ESP32 2.8 inch display">
     <div id="drop" title="Нажми, перетащи или вставь картинку (Ctrl+V)"><span id="dropt">📷 фото товара</span></div>
@@ -89,7 +100,7 @@ details summary{cursor:pointer;color:var(--mute)}
 </div>
 
 <div class="card" id="minecard" hidden>
-  <label><span class="step">3</span>Мои находки — вставь ссылки на товары (по одной в строке)</label>
+  <label><span class="step">4</span>Мои находки — вставь ссылки на товары (по одной в строке)</label>
   <textarea id="mine" placeholder="https://www.aliexpress.com/item/1005....html"></textarea>
   <div style="margin-top:10px"><button id="cmp">Сравнить с агентом</button></div>
 </div>
@@ -113,6 +124,28 @@ $("ship").innerHTML=COUNTRIES.map(([c,n])=>`<option value="${c}">${n} (${c})</op
 $("ship").value=lsGet("ship")||"UA";
 $("ship").onchange=()=>lsSet("ship",$("ship").value);
 
+let MODELS=[];
+async function loadModels(){
+  try{MODELS=await (await fetch("/api/models")).json()}catch(e){MODELS=[{kind:"minicpm",model:"minicpm-v4.7",label:"MiniCPM-V 4.7",vision:true}]}
+  $("model").innerHTML=MODELS.map((m,i)=>`<option value="${i}">${esc(m.label)}</option>`).join("")+`<option value="custom">другая (адрес OpenAI-формата)…</option>`;
+  const saved=lsGet("model");const i=MODELS.findIndex(m=>m.model===saved);if(i>=0)$("model").value=i;
+  $("custom").hidden=$("model").value!=="custom";
+}
+$("model").onchange=()=>{$("custom").hidden=$("model").value!=="custom";const m=MODELS[$("model").value];if(m)lsSet("model",m.model)};
+function modelCfg(){
+  if($("model").value==="custom")return{kind:"openai",base_url:$("curl").value.trim(),model:$("cmodel").value.trim(),api_key:$("ckey").value.trim(),vision:true};
+  return MODELS[$("model").value]||null;
+}
+$("fetch").value=lsGet("fetch")||"server";
+function fetchHint(){$("fhint").hidden=$("fetch").value!=="extension"}
+$("fetch").onchange=()=>{lsSet("fetch",$("fetch").value);fetchHint()};
+async function extStatus(){
+  try{const s=await (await fetch("/api/ext/status")).json();
+    $("extst").innerHTML=s.connected?`<span style="color:var(--acc)">● расширение на связи</span> (${esc(s.info.browser||"")})`:'<span style="color:var(--warn)">● расширение не на связи</span>';
+  }catch(e){}
+}
+loadModels();extStatus();fetchHint();setInterval(extStatus,5000);
+
 function setImage(file){
   if(!file||!file.type.startsWith("image/"))return;
   const r=new FileReader();
@@ -132,7 +165,7 @@ $("go").onclick=async()=>{
   if(!q&&!img64){$("status").textContent="напиши название или добавь фото";return}
   $("go").disabled=true;$("status").textContent="запускаю…";
   try{
-    const r=await fetch("/api/hunt",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ship_to:$("ship").value,query:q,image_b64:img64})});
+    const r=await fetch("/api/hunt",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ship_to:$("ship").value,query:q,image_b64:img64,model:modelCfg(),fetch:$("fetch").value})});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||r.status);
     open_job(d.id);
@@ -153,6 +186,7 @@ async function poll(){
   if(!d.busy){clearInterval(timer);$("go").disabled=false;$("cmp").disabled=false;loadHist()}
 }
 
+function money(v,cur){if(v==null)return"?";const n=Number(v).toFixed(2);return(!cur||cur==="USD")?"$"+n:n+" "+cur}
 function pct(x){return x==null?"—":Math.round(x*100)+"%"}
 
 function render(d){
@@ -169,11 +203,11 @@ function render(d){
   if(top.length){
     const best=top[0];
     const hum=top.filter(c=>c.source==="human"), ag=top.filter(c=>c.source!=="human");
-    let s=`Лучшее: <b>$${best.total.toFixed(2)}</b> `;
+    let s=`Лучшее: <b>${money(best.total,best.currency)}</b> `;
     if(hum.length){
       const hb=Math.min(...hum.map(c=>c.total)), ab=ag.length?Math.min(...ag.map(c=>c.total)):Infinity;
-      s+= hb<ab-0.005?`— <span class="tag human">ТЫ</span> нашёл дешевле агента на $${(ab-hb).toFixed(2)}`:
-          ab<hb-0.005?`— <span class="tag agent">АГЕНТ</span> нашёл дешевле тебя на $${(hb-ab).toFixed(2)}`:"— ничья";
+      s+= hb<ab-0.005?`— <span class="tag human">ТЫ</span> нашёл дешевле агента на ${money(ab-hb,best.currency)}`:
+          ab<hb-0.005?`— <span class="tag agent">АГЕНТ</span> нашёл дешевле тебя на ${money(hb-ab,best.currency)}`:"— ничья";
     }
     $("score").innerHTML=s;
   }else{$("score").innerHTML=d.done?"Ничего подходящего не нашлось.":""}
@@ -185,8 +219,8 @@ function render(d){
        <ul class="why">${(c.why||[]).map(w=>`<li>${esc(w)}</li>`).join("")}</ul>
        ${(c.flags||[]).map(f=>`<span class="flag">⚠ ${esc(f)}</span>`).join("")}
      </div>
-     <div class="price"><div class="t">$${c.total.toFixed(2)}</div>
-       <div class="mute" style="font-size:12px">$${c.price.toFixed(2)} + $${c.shipping??"?"}</div>
+     <div class="price"><div class="t">${money(c.total,c.currency)}</div>
+       <div class="mute" style="font-size:12px">${money(c.price,c.currency)} + ${money(c.shipping,c.currency)}</div>
        <div class="bar"><i style="width:${Math.round((c.p_good||0)*100)}%"></i></div>
        <div style="font-size:12px">оценка ${pct(c.p_good)}: хорошая покупка</div></div>
    </div>`).join("");

@@ -29,7 +29,7 @@ def plug_of(attrs):
 
 
 class Hunt:
-    def __init__(self, ship_to="UA", query=None, image=None, log=print):
+    def __init__(self, ship_to="UA", query=None, image=None, log=print, model=None, fetcher=None):
         self.ship_to = ship_to
         self.query = (query or "").strip()
         self.image = image          # bytes или None
@@ -44,6 +44,8 @@ class Hunt:
         self.blocked = False
         self.confidence = None
         self.t0 = time.time()
+        self.model = models.Model(model, log)
+        self.fetcher_factory = fetcher   # None = робот-браузер на сервере; иначе функция -> объект с .item(pid)
 
     # ---------- понимание запроса ----------
     def understand(self):
@@ -56,7 +58,7 @@ class Hunt:
                     '"not" (list of things that look similar but are wrong, e.g. "cable only", "car charger"), '
                     '"queries" (list of 4 short English search queries, different wording, most likely first).')
         imgs = [self.image] if self.image else []
-        it = models.ask_json(prompt, imgs, 500, default={}) or {}
+        it = self.model.ask_json(prompt, imgs, 500, default={}) or {}
         if not it.get("what"):
             it = {"what": self.query or "the product in the photo", "must": [], "not": [], "queries": [self.query]}
         it["queries"] = [q for q in it.get("queries", []) if q][:6] or [self.query]
@@ -121,7 +123,7 @@ class Hunt:
                   f"Marketplace listings (number. price title):\n{lines}\n\n"
                   "Which listings could sell the wanted product (possibly as one of several variants)? "
                   "Return a JSON list of their numbers.")
-        idx = models.ask_json(prompt, [], 400, default=None)
+        idx = self.model.ask_json(prompt, [], 400, default=None)
         if not isinstance(idx, list):
             return hits
         keep = [hits[i] for i in idx if isinstance(i, int) and 0 <= i < len(hits)]
@@ -142,7 +144,7 @@ class Hunt:
                   "Which variant numbers are exactly the wanted product (not an accessory, cable only, or a different item)? "
                   'If the shopper must ship to ' + self.ship_to + ', prefer a plug/version usable there when it matters. '
                   'JSON: {"match": [numbers], "note": "one short sentence"}')
-        ans = models.ask_json(prompt, [], 200, default={}) or {}
+        ans = self.model.ask_json(prompt, [], 200, default={}) or {}
         match = [variants[i] for i in ans.get("match", []) if isinstance(i, int) and 0 <= i < len(variants)]
         flags = []
         if not match:
@@ -170,7 +172,8 @@ class Hunt:
         look = None
         if img:
             try:
-                look = models.ask(f"Look at the photo. Does it show this product: {self.intent['what']}? "
+                look = self.model.ask(f"Look at the photo. Does it show this product: {self.intent['what']}? "
+                                  "A product that exceeds a minimum requirement (e.g. more watts, more ports) still counts as YES. "
                                   "Answer YES or NO, then a dash and what is actually shown (max 12 words). "
                                   "If wattage, model or chip names are printed, quote them.", [img], 60)
                 if look.upper().startswith("NO"):
@@ -186,13 +189,14 @@ class Hunt:
                 "ship_days": ship["days"] if ship else None, "total": round(total, 2),
                 "img": ("https:" + img) if img and img.startswith("//") else img,
                 "look": look, "flags": flags, "note": ans.get("note", ""), "rejected": False,
+                "currency": it.get("currency") or "USD",
                 "n_variants": len(variants)}
 
     def _fetcher(self):
         import threading
         tid = threading.get_ident()
         if getattr(self, "_f_tid", None) != tid:
-            self._f = ali.Fetcher(self.ship_to)
+            self._f = self.fetcher_factory(self.ship_to, self.log) if self.fetcher_factory else ali.Fetcher(self.ship_to)
             self._f_tid = tid
         return self._f
 
@@ -227,7 +231,8 @@ class Hunt:
 
     # ---------- главный цикл ----------
     def run(self):
-        models.use("eyes", self.log)
+        self.log("модель: " + self.model.label())
+        self.model.prepare()
         self.understand()
         n = 0
         while n < MAX_LEVELS and time.time() - self.t0 < TIME_BUDGET:
@@ -302,8 +307,8 @@ class Hunt:
         head = (f"A shopper in {self.ship_to} wants: {self.intent['what']}. Must have: {', '.join(self.intent.get('must', []))}.\n"
                 f"Checked offers, cheapest real total first:\n{self.table_text(rows)}\n{self.depth_text()}\n")
         for i, c in enumerate(rows, 1):
-            c["p_good"] = models.yes_prob(head + f"\nIs offer #{i} the right product at a good real price for this shopper? Answer Yes or No.")
-        self.confidence = models.yes_prob(head + "\nConsidering how deep the search went, is offer #1 really the cheapest correct "
+            c["p_good"] = self.model.yes_prob(head + f"\nIs offer #{i} the right product at a good real price for this shopper? Answer Yes or No.")
+        self.confidence = self.model.yes_prob(head + "\nConsidering how deep the search went, is offer #1 really the cheapest correct "
                                                  "offer on the whole marketplace? Answer Yes or No.")
         for c in rows:
             c["why"] = self._why(c, rows[0])

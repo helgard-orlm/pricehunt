@@ -15,7 +15,11 @@ import traceback
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import queue
+
+import ali
 import hunt
+import models
 
 PORT = int(os.environ.get("PORT", "8931"))
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -24,8 +28,65 @@ os.makedirs(JOBS_DIR, exist_ok=True)
 JOBS = {}
 
 
+# ---------- расширение браузера: очередь заданий ----------
+class Ext:
+    tasks = queue.Queue()
+    waiting = {}            # task id -> {"ev": Event, "res": dict}
+    last_seen = 0.0
+    info = {}
+
+    @classmethod
+    def connected(cls):
+        return time.time() - cls.last_seen < 30
+
+
+class ExtFetcher:
+    """Товары открывает расширение в браузере пользователя: его адрес, его вход, его капча."""
+    def __init__(self, ship_to, log):
+        self.ship_to, self.log = ship_to, log
+
+    def item(self, pid):
+        c = ali.cached_item(pid, "EXT", "EXT")
+        if c:
+            return c
+        if not Ext.connected():
+            raise RuntimeError("расширение не на связи")
+        tid = uuid.uuid4().hex[:10]
+        slot = {"ev": threading.Event(), "res": None}
+        Ext.waiting[tid] = slot
+        Ext.tasks.put({"id": tid, "type": "item", "pid": pid, "url": f"https://www.aliexpress.com/item/{pid}.html"})
+        told = False
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            if slot["ev"].wait(2):
+                r = slot["res"]
+                if r.get("captcha"):
+                    if not told:
+                        self.log("  🧩 AliExpress показал капчу в твоём браузере — сдвинь ползунок во вкладке, агент подождёт (до 5 мин)")
+                        told = True
+                    deadline = time.time() + 300
+                    slot["ev"].clear()
+                    continue
+                break
+        Ext.waiting.pop(tid, None)
+        r = slot["res"]
+        if not r or not r.get("raw"):
+            return None
+        it = ali.parse_item(ali._pdp_result(r["raw"]))
+        it["id"] = pid
+        to = {s.get("ship_to") for s in it["shipping"]} - {None}
+        if to and self.ship_to not in to:
+            self.log(f"  ⚠ твой AliExpress считает доставку в {', '.join(to)}, а выбрано {self.ship_to} — цены по настройкам сайта")
+        os.makedirs(ali.CACHE_DIR, exist_ok=True)
+        json.dump(it, open(ali._cache_path(pid, "EXT", "EXT"), "w"), ensure_ascii=False)
+        return it
+
+    def close(self):
+        pass
+
+
 class Job:
-    def __init__(self, ship_to, query, image):
+    def __init__(self, ship_to, query, image, model=None, fetch="server"):
         self.id = time.strftime("%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
         self.lines = []
         self.error = None
@@ -33,7 +94,9 @@ class Job:
         self.created = time.time()
         self.query = query
         self.has_image = bool(image)
-        self.h = hunt.Hunt(ship_to=ship_to, query=query, image=image, log=self.log)
+        self.fetch = fetch
+        self.h = hunt.Hunt(ship_to=ship_to, query=query, image=image, log=self.log, model=model,
+                           fetcher=(lambda st, lg: ExtFetcher(st, lg)) if fetch == "extension" else None)
 
     def log(self, s):
         self.lines.append(time.strftime("%H:%M:%S ") + s)
@@ -59,7 +122,8 @@ class Job:
     def view(self):
         st = self.h.state()
         st.update({"id": self.id, "busy": self.busy, "error": self.error, "log": self.lines[-400:],
-                   "query": self.query, "has_image": self.has_image, "ship_to": self.h.ship_to})
+                   "query": self.query, "has_image": self.has_image, "ship_to": self.h.ship_to,
+                   "model": self.h.model.label(), "fetch": self.fetch})
         return st
 
     def save(self):
@@ -78,6 +142,7 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype + ("; charset=utf-8" if "json" in ctype or "html" in ctype else ""))
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(data)
 
@@ -87,6 +152,13 @@ class H(BaseHTTPRequestHandler):
 
     def log_message(self, *a):
         pass
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
 
     def do_GET(self):
         p = self.path.split("?")[0]
@@ -101,6 +173,19 @@ class H(BaseHTTPRequestHandler):
             if os.path.exists(f):
                 return self._send(200, json.load(open(f)))
             return self._send(404, {"error": "нет такого поиска"})
+        if p == "/api/models":
+            return self._send(200, models.available())
+        if p == "/api/ext/status":
+            return self._send(200, {"connected": Ext.connected(), "info": Ext.info,
+                                    "queued": Ext.tasks.qsize(), "waiting": len(Ext.waiting)})
+        if p == "/api/ext/next":
+            Ext.last_seen = time.time()
+            try:
+                t = Ext.tasks.get(timeout=20)
+            except queue.Empty:
+                t = {}
+            Ext.last_seen = time.time()
+            return self._send(200, t)
         if p == "/api/history":
             out = []
             for name in sorted(os.listdir(JOBS_DIR), reverse=True)[:40]:
@@ -128,10 +213,24 @@ class H(BaseHTTPRequestHandler):
             img = base64.b64decode(b["image_b64"].split(",")[-1]) if b.get("image_b64") else None
             if not q and not img:
                 return self._send(400, {"error": "нужно название или фото"})
-            j = Job(b.get("ship_to") or "UA", q, img)
+            fetch = b.get("fetch") or "server"
+            if fetch == "extension" and not Ext.connected():
+                return self._send(400, {"error": "расширение не на связи — открой браузер с расширением"})
+            j = Job(b.get("ship_to") or "UA", q, img, b.get("model"), fetch)
             JOBS[j.id] = j
             j.start()
             return self._send(200, {"id": j.id})
+        if p == "/api/ext/result":
+            Ext.last_seen = time.time()
+            slot = Ext.waiting.get(b.get("id"))
+            if slot:
+                slot["res"] = b
+                slot["ev"].set()
+            return self._send(200, {"ok": bool(slot)})
+        if p == "/api/ext/hello":
+            Ext.last_seen = time.time()
+            Ext.info = {k: b.get(k) for k in ("browser", "version", "ua")}
+            return self._send(200, {"ok": True})
         if p.startswith("/api/hunt/") and p.endswith("/mine"):
             j = JOBS.get(p.split("/")[3])
             if not j:
