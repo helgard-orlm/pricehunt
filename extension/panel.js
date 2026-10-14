@@ -182,6 +182,13 @@ $("cmp").onclick = async () => {
   $("cmp").disabled = false;
 };
 
+$("copylog").onclick = async () => {
+  // журнал + итоговый список одним текстом — чтобы прислать разбор целиком
+  const text = logLines.join("\n") + "\n\n" + $("verdict").textContent + "\n" + [...document.querySelectorAll("#list .item")].map((e) => e.innerText.replace(/\n+/g, " | ")).join("\n");
+  try { await navigator.clipboard.writeText(text); $("copylog").textContent = t("copied"); } catch { $("copylog").textContent = "✗"; }
+  setTimeout(() => ($("copylog").textContent = t("copy_log")), 1500);
+};
+
 function log(t) {
   logLines.push(new Date().toLocaleTimeString().slice(0, 8) + " " + t);
   const lg = $("log"), bottom = lg.scrollTop + lg.clientHeight >= lg.scrollHeight - 20;

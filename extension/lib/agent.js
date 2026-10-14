@@ -299,7 +299,7 @@ export class Hunt {
   publish() {
     this.on.update?.({
       level: this.levels.length, fatigue: this.fatigue, seen: this.seen.size, checked: this.checked.size,
-      elapsed: this.elapsed(), best: this.best, ref: this.refEval, rows: this.rows().slice(0, 12).map((c) => ({ ...c, tier: this.tier(c) })),
+      elapsed: this.elapsed(), best: this.best, ref: this.refEval, rows: this.rows().map((c) => ({ ...c, tier: this.tier(c) })),
       done: this.done, confidence: this.confidence, blocked: this.blocked, cancelled: this.cancelled,
     });
   }
