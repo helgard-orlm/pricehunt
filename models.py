@@ -135,10 +135,14 @@ class Model:
         except Exception:
             return default
 
-    def yes_prob(self, text):
+    def yes_prob(self, text, images=()):
         """Оценка «да» по вероятностям первого токена (logprobs). Если сервер их не отдаёт — None."""
+        if images and not self.vision:
+            images = ()
+        content = [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + img_b64(i)}} for i in images]
+        content.append({"type": "text", "text": text})
         try:
-            r = self._chat([{"type": "text", "text": text}], 1, {"logprobs": True, "top_logprobs": 10})
+            r = self._chat(content, 1, {"logprobs": True, "top_logprobs": 10})
             lps = r["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
         except Exception:
             return None
@@ -151,11 +155,24 @@ class Model:
         return round(yes / (yes + no), 3) if yes + no > 0 else None
 
 
+def to_jpeg(data, max_side=1024):
+    import io
+    from PIL import Image
+    im = Image.open(io.BytesIO(data))
+    im = im.convert("RGB")
+    im.thumbnail((max_side, max_side))
+    out = io.BytesIO()
+    im.save(out, "JPEG", quality=90)
+    return out.getvalue()
+
+
 def img_b64(src):
     if isinstance(src, (bytes, bytearray)):
-        return base64.b64encode(src).decode()
+        return base64.b64encode(to_jpeg(src)).decode()
+    if os.path.exists(str(src)):
+        return base64.b64encode(to_jpeg(open(src, "rb").read())).decode()
     url = src if src.startswith("http") else "https:" + src
     if "alicdn" in url or "aliexpress-media" in url:
         if not re.search(r"_\d+x\d+", url): url += "_350x350.jpg"
     data = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=30).read()
-    return base64.b64encode(data).decode()
+    return base64.b64encode(to_jpeg(data)).decode()

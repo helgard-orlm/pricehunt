@@ -13,7 +13,11 @@ with sync_playwright() as pw:
         time.sleep(1)
     print("ext status:", get("/api/ext/status"))
     print("sw:", [w.url for w in ctx.service_workers])
-    j = post("/api/hunt", {"ship_to": "UA", "query": sys.argv[1], "fetch": "extension"})
+    import base64
+    body = {"ship_to": "UA", "query": sys.argv[1], "fetch": "extension"}
+    if len(sys.argv) > 3:
+        body["image_b64"] = base64.b64encode(open(sys.argv[3], "rb").read()).decode()
+    j = post("/api/hunt", body)
     print("job", j)
     t = time.time(); seen = 0
     while time.time() - t < float(sys.argv[2]):

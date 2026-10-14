@@ -29,8 +29,41 @@ JOBS = {}
 
 
 # ---------- расширение браузера: очередь заданий ----------
+class TaskList:
+    """Очередь заданий: расширение берёт только то, что умеет его версия (0.1 — только товары)."""
+    def __init__(self):
+        self.items, self.cv = [], threading.Condition()
+
+    def put(self, t):
+        with self.cv:
+            self.items.append(t); self.cv.notify_all()
+
+    def get(self, can, timeout):
+        end = time.time() + timeout
+        with self.cv:
+            while True:
+                for i, t in enumerate(self.items):
+                    if t["type"] in can:
+                        return self.items.pop(i)
+                left = end - time.time()
+                if left <= 0:
+                    raise queue.Empty
+                self.cv.wait(left)
+
+    def qsize(self):
+        return len(self.items)
+
+
+def ext_can(version):
+    try:
+        v = tuple(int(x) for x in (version or "0.1.0").split("."))
+    except ValueError:
+        v = (0, 1, 0)
+    return {"item"} if v < (0, 2, 0) else {"item", "fetch_html", "image_search"}
+
+
 class Ext:
-    tasks = queue.Queue()
+    tasks = TaskList()
     waiting = {}            # task id -> {"ev": Event, "res": dict}
     last_seen = 0.0
     info = {}
@@ -45,18 +78,17 @@ class ExtFetcher:
     def __init__(self, ship_to, log):
         self.ship_to, self.log = ship_to, log
 
-    def item(self, pid):
-        c = ali.cached_item(pid, "EXT", "EXT")
-        if c:
-            return c
+    def _task(self, task, timeout=90):
+        """Отдать задание расширению и дождаться ответа; капча -> ждём человека до 5 минут."""
         if not Ext.connected():
             raise RuntimeError("расширение не на связи")
         tid = uuid.uuid4().hex[:10]
+        task["id"] = tid
         slot = {"ev": threading.Event(), "res": None}
         Ext.waiting[tid] = slot
-        Ext.tasks.put({"id": tid, "type": "item", "pid": pid, "url": f"https://www.aliexpress.com/item/{pid}.html"})
+        Ext.tasks.put(task)
         told = False
-        deadline = time.time() + 90
+        deadline = time.time() + timeout
         while time.time() < deadline:
             if slot["ev"].wait(2):
                 r = slot["res"]
@@ -69,8 +101,25 @@ class ExtFetcher:
                     continue
                 break
         Ext.waiting.pop(tid, None)
-        r = slot["res"]
-        if not r or not r.get("raw"):
+        return slot["res"] or {}
+
+    def search(self, query, ship_to=None, sort="price_asc", page=1):
+        import urllib.parse
+        q = urllib.parse.quote(query.replace(" ", "-"))
+        r = self._task({"type": "fetch_html", "url": f"https://www.aliexpress.com/w/wholesale-{q}.html?SortType={sort}&page={page}"})
+        return ali._parse_search(r.get("html") or "")
+
+    def image_search(self, jpeg):
+        import base64
+        r = self._task({"type": "image_search", "image": base64.b64encode(jpeg).decode()}, 120)
+        return r.get("url"), ali._parse_search(r.get("html") or "")
+
+    def item(self, pid):
+        c = ali.cached_item(pid, "EXT", "EXT")
+        if c:
+            return c
+        r = self._task({"type": "item", "pid": pid, "url": f"https://www.aliexpress.com/item/{pid}.html"})
+        if not r.get("raw"):
             return None
         it = ali.parse_item(ali._pdp_result(r["raw"]))
         it["id"] = pid
@@ -86,7 +135,7 @@ class ExtFetcher:
 
 
 class Job:
-    def __init__(self, ship_to, query, image, model=None, fetch="server"):
+    def __init__(self, ship_to, query, image, model=None, fetch="server", ref_url=None):
         self.id = time.strftime("%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
         self.lines = []
         self.error = None
@@ -94,9 +143,16 @@ class Job:
         self.created = time.time()
         self.query = query
         self.has_image = bool(image)
+        self.ref_url = ref_url
         self.fetch = fetch
         self.h = hunt.Hunt(ship_to=ship_to, query=query, image=image, log=self.log, model=model,
-                           fetcher=(lambda st, lg: ExtFetcher(st, lg)) if fetch == "extension" else None)
+                           fetcher=(lambda st, lg: ExtFetcher(st, lg)) if fetch == "extension" else None,
+                           ref_url=ref_url)
+        if image:
+            try:
+                open(os.path.join(JOBS_DIR, self.id + "_photo.jpg"), "wb").write(self.h.image)
+            except Exception:
+                pass
 
     def log(self, s):
         self.lines.append(time.strftime("%H:%M:%S ") + s)
@@ -123,7 +179,7 @@ class Job:
         st = self.h.state()
         st.update({"id": self.id, "busy": self.busy, "error": self.error, "log": self.lines[-400:],
                    "query": self.query, "has_image": self.has_image, "ship_to": self.h.ship_to,
-                   "model": self.h.model.label(), "fetch": self.fetch})
+                   "model": self.h.model.label(), "fetch": self.fetch, "ref_url": self.ref_url})
         return st
 
     def save(self):
@@ -180,8 +236,9 @@ class H(BaseHTTPRequestHandler):
                                     "queued": Ext.tasks.qsize(), "waiting": len(Ext.waiting)})
         if p == "/api/ext/next":
             Ext.last_seen = time.time()
+            ver = (self.path.split("v=")[1].split("&")[0]) if "v=" in self.path else "0.1.0"
             try:
-                t = Ext.tasks.get(timeout=20)
+                t = Ext.tasks.get(ext_can(ver), timeout=20)
             except queue.Empty:
                 t = {}
             Ext.last_seen = time.time()
@@ -193,7 +250,7 @@ class H(BaseHTTPRequestHandler):
                     v = json.load(open(os.path.join(JOBS_DIR, name)))
                     top = v.get("top") or []
                     hum = [c for c in top if c.get("source") == "human"]
-                    out.append({"id": v["id"], "query": v.get("query") or ("(фото)" if v.get("has_image") else ""),
+                    out.append({"id": v["id"], "query": v.get("query") or ("(фото)" if v.get("has_image") else (v.get("ref_url") or "")[:60]),
                                 "ship_to": v.get("ship_to"), "best": top[0]["total"] if top else None,
                                 "winner": top[0].get("source") if top else None, "human": len(hum),
                                 "conf": v.get("confidence")})
@@ -211,12 +268,13 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/hunt":
             q = (b.get("query") or "").strip()
             img = base64.b64decode(b["image_b64"].split(",")[-1]) if b.get("image_b64") else None
-            if not q and not img:
-                return self._send(400, {"error": "нужно название или фото"})
+            ref_url = (b.get("ref_url") or "").strip()
+            if not q and not img and not ref_url:
+                return self._send(400, {"error": "нужно название, фото или ссылка на товар"})
             fetch = b.get("fetch") or "server"
             if fetch == "extension" and not Ext.connected():
                 return self._send(400, {"error": "расширение не на связи — открой браузер с расширением"})
-            j = Job(b.get("ship_to") or "UA", q, img, b.get("model"), fetch)
+            j = Job(b.get("ship_to") or "UA", q, img, b.get("model"), fetch, ref_url)
             JOBS[j.id] = j
             j.start()
             return self._send(200, {"id": j.id})
@@ -230,6 +288,13 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/ext/hello":
             Ext.last_seen = time.time()
             Ext.info = {k: b.get(k) for k in ("browser", "version", "ua")}
+            return self._send(200, {"ok": True})
+        if p.startswith("/api/hunt/") and p.endswith("/stop"):
+            j = JOBS.get(p.split("/")[3])
+            if not j:
+                return self._send(404, {"error": "нет такого поиска"})
+            j.h.cancelled = True
+            j.log("остановлено по кнопке «Стоп» — показываю, что успел")
             return self._send(200, {"ok": True})
         if p.startswith("/api/hunt/") and p.endswith("/mine"):
             j = JOBS.get(p.split("/")[3])

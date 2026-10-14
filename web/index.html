@@ -43,6 +43,8 @@ button.ghost{background:transparent;color:var(--acc);border:1px solid var(--acc)
 .tag{border-radius:6px;padding:1px 7px;font-size:12px;font-weight:700;margin-right:6px}
 .tag.agent{background:var(--acc2);color:var(--acc)}
 .tag.human{background:var(--humanbg);color:var(--human)}
+.tag.ref{background:var(--line);color:var(--ink)}
+.dim{opacity:.55}
 #score{font-size:17px;font-weight:600}
 details summary{cursor:pointer;color:var(--mute)}
 .hist a{color:var(--acc)}
@@ -76,9 +78,11 @@ details summary{cursor:pointer;color:var(--mute)}
     <input type="text" id="q" placeholder="например: 65W USB-C charger, ESP32 2.8 inch display">
     <div id="drop" title="Нажми, перетащи или вставь картинку (Ctrl+V)"><span id="dropt">📷 фото товара</span></div>
   </div>
+  <input type="text" id="refurl" placeholder="или ссылка на товар-образец: агент сам возьмёт фото и название и попробует найти дешевле" style="margin-top:10px">
   <input type="file" id="file" accept="image/*" hidden>
   <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <button id="go">Найти</button>
+    <button class="ghost" id="stop" hidden>Стоп</button>
     <button class="ghost" id="clearimg" hidden>убрать фото</button>
     <span class="mute" id="status"></span>
   </div>
@@ -159,13 +163,14 @@ $("drop").ondrop=e=>{e.preventDefault();setImage(e.dataTransfer.files[0])};
 document.addEventListener("paste",e=>{for(const it of e.clipboardData.items){if(it.type.startsWith("image/")){setImage(it.getAsFile());break}}});
 $("clearimg").onclick=()=>{img64=null;$("drop").innerHTML='<span>📷 фото товара</span>';$("clearimg").hidden=true};
 $("q").onkeydown=e=>{if(e.key==="Enter")$("go").click()};
+$("refurl").onkeydown=e=>{if(e.key==="Enter")$("go").click()};
 
 $("go").onclick=async()=>{
-  const q=$("q").value.trim();
-  if(!q&&!img64){$("status").textContent="напиши название или добавь фото";return}
+  const q=$("q").value.trim(), ref=$("refurl").value.trim();
+  if(!q&&!img64&&!ref){$("status").textContent="напиши название, добавь фото или ссылку на товар";return}
   $("go").disabled=true;$("status").textContent="запускаю…";
   try{
-    const r=await fetch("/api/hunt",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ship_to:$("ship").value,query:q,image_b64:img64,model:modelCfg(),fetch:$("fetch").value})});
+    const r=await fetch("/api/hunt",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ship_to:$("ship").value,query:q,image_b64:img64,model:modelCfg(),fetch:$("fetch").value,ref_url:ref})});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||r.status);
     open_job(d.id);
@@ -183,9 +188,11 @@ async function poll(){
   let d;
   try{const r=await fetch("/api/hunt/"+job);d=await r.json();if(!r.ok)throw new Error(d.error)}catch(e){$("status").textContent="нет связи: "+e.message;return}
   render(d);
+  $("stop").hidden=!d.busy;
   if(!d.busy){clearInterval(timer);$("go").disabled=false;$("cmp").disabled=false;loadHist()}
 }
 
+function tagOf(c){return c.source==="ref"?'<span class="tag ref">ОБРАЗЕЦ</span>':c.source==="human"?'<span class="tag human">ТЫ</span>':'<span class="tag agent">АГЕНТ</span>'}
 function money(v,cur){if(v==null)return"?";const n=Number(v).toFixed(2);return(!cur||cur==="USD")?"$"+n:n+" "+cur}
 function pct(x){return x==null?"—":Math.round(x*100)+"%"}
 
@@ -202,27 +209,32 @@ function render(d){
   $("minecard").hidden=!d.done;
   if(top.length){
     const best=top[0];
-    const hum=top.filter(c=>c.source==="human"), ag=top.filter(c=>c.source!=="human");
-    let s=`Лучшее: <b>${money(best.total,best.currency)}</b> `;
+    const fits=c=>!(c.same!=null&&c.same<0.3)&&!(c.flags||[]).some(f=>f.startsWith("фото не совпадает"));
+    const hum=top.filter(c=>c.source==="human"&&fits(c)), ag=top.filter(c=>c.source==="agent"&&fits(c));
+    let s0="", s="";
+    if(d.ref&&!d.ref.rejected&&ag.length){const ab=Math.min(...ag.map(c=>c.total));
+      s0=ab<d.ref.total-0.005?` · агент нашёл дешевле образца на ${money(d.ref.total-ab,best.currency)}`:` · дешевле образца агент не нашёл`}
     if(hum.length){
       const hb=Math.min(...hum.map(c=>c.total)), ab=ag.length?Math.min(...ag.map(c=>c.total)):Infinity;
-      s+= hb<ab-0.005?`— <span class="tag human">ТЫ</span> нашёл дешевле агента на ${money(ab-hb,best.currency)}`:
+      s= hb<ab-0.005?`— <span class="tag human">ТЫ</span> нашёл дешевле агента на ${money(ab-hb,best.currency)}`:
           ab<hb-0.005?`— <span class="tag agent">АГЕНТ</span> нашёл дешевле тебя на ${money(hb-ab,best.currency)}`:"— ничья";
     }
-    $("score").innerHTML=s;
+    const bestFit=[...ag,...hum].sort((a,b)=>a.total-b.total)[0]||best;
+    $("score").innerHTML=`Лучшее подходящее: <b>${money(bestFit.total,bestFit.currency)}</b> `+s+s0;
   }else{$("score").innerHTML=d.done?"Ничего подходящего не нашлось.":""}
   $("top").innerHTML=top.map((c,i)=>`
-   <div class="item">
+   <div class="item${c.source!=="ref"&&c.same!=null&&c.same<0.3?" dim":""}">
      <a href="${esc(c.url)}" target="_blank" rel="noopener"><img src="${esc(c.img||"")}" alt="" loading="lazy"></a>
      <div>
-       <div class="title"><span class="tag ${c.source==="human"?"human":"agent"}">${c.source==="human"?"ТЫ":"АГЕНТ"}</span>${i+1}. <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a></div>
+       <div class="title">${tagOf(c)}${i+1}. <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a></div>
        <ul class="why">${(c.why||[]).map(w=>`<li>${esc(w)}</li>`).join("")}</ul>
        ${(c.flags||[]).map(f=>`<span class="flag">⚠ ${esc(f)}</span>`).join("")}
      </div>
      <div class="price"><div class="t">${money(c.total,c.currency)}</div>
        <div class="mute" style="font-size:12px">${money(c.price,c.currency)} + ${money(c.shipping,c.currency)}</div>
        <div class="bar"><i style="width:${Math.round((c.p_good||0)*100)}%"></i></div>
-       <div style="font-size:12px">оценка ${pct(c.p_good)}: хорошая покупка</div></div>
+       <div style="font-size:12px">оценка ${pct(c.p_good)}: хорошая покупка</div>
+       ${c.same!=null?`<div style="font-size:12px">похож на твоё фото: ${pct(c.same)}</div>`:""}</div>
    </div>`).join("");
   const rej=d.rejected||[];
   $("rejcard").hidden=!rej.length;
@@ -230,6 +242,7 @@ function render(d){
   $("rej").innerHTML=rej.map(c=>`<div style="padding:4px 0;border-top:1px solid var(--line)"><span class="tag ${c.source==="human"?"human":"agent"}">${c.source==="human"?"ТЫ":"АГЕНТ"}</span><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a><div class="mute" style="font-size:13px">${esc(c.note)}</div></div>`).join("");
 }
 
+$("stop").onclick=async()=>{if(job)await fetch(`/api/hunt/${job}/stop`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});$("status").textContent="останавливаю…"};
 $("cmp").onclick=async()=>{
   const urls=$("mine").value.split(/\s+/).filter(u=>/aliexpress|^\d{10,}$/.test(u));
   if(!urls.length){$("status").textContent="вставь ссылки AliExpress";return}

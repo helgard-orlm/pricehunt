@@ -102,7 +102,7 @@ def cached_item(pid, ship_to="UA", currency="USD"):
 
 class Fetcher:
     """Один браузер на поток, товары по одному с паузой (вежливый темп — иначе капча через ~25 страниц)."""
-    PAUSE = 2.5
+    PAUSE = 1.5
 
     def __init__(self, ship_to="UA", currency="USD"):
         from playwright.sync_api import sync_playwright
