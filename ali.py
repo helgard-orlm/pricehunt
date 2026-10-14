@@ -1,5 +1,5 @@
 """AliExpress: поиск (простой HTTP) и карточка товара (безголовый Chromium, ответ pdp API)."""
-import glob, json, re, urllib.parse, urllib.request
+import glob, json, os, re, time, urllib.parse, urllib.request
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
 CHROME = (glob.glob("/home/helgard/.cache/ms-playwright/chromium-1243/chrome-linux*/chrome") or [None])[0]
@@ -15,21 +15,7 @@ def search(query, ship_to="UA", currency="USD", sort="price_asc", page=1):
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "en-US",
                                                "Cookie": "aep_usuc_f=" + region_cookie(ship_to, currency)})
     html = urllib.request.urlopen(req, timeout=30).read().decode("utf8", "replace")
-    out = []
-    for m in re.finditer(r'"productId":"(\d+)"', html):
-        chunk = html[m.start():m.start() + 6000]
-        title = re.search(r'"displayTitle":"((?:[^"\\]|\\.)*)"', chunk)
-        price = re.search(r'"minPrice":([\d.]+)', chunk)
-        img = re.search(r'"imgUrl":"([^"]+)"', chunk)
-        if title and price:
-            out.append({"id": m.group(1), "title": json.loads('"%s"' % title.group(1)),
-                        "list_price": float(price.group(1)),
-                        "img": "https:" + img.group(1) if img and img.group(1).startswith("//") else (img.group(1) if img else None)})
-    seen, uniq = set(), []
-    for o in out:
-        if o["id"] not in seen:
-            seen.add(o["id"]); uniq.append(o)
-    return uniq
+    return _parse_search(html)
 
 
 def _pdp_result(text):
@@ -74,6 +60,89 @@ def parse_item(r):
     return {"title": title, "main_images": main[:6], "variants": variants, "shipping": ship}
 
 
+class Captcha(Exception):
+    """AliExpress попросил капчу (страница punish) — дальше открывать товары нельзя, ждать."""
+
+
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "cache")
+CACHE_TTL = 6 * 3600
+
+
+def _cache_path(pid, ship_to, currency):
+    return os.path.join(CACHE_DIR, f"{pid}_{ship_to}_{currency}.json")
+
+
+def cached_item(pid, ship_to="UA", currency="USD"):
+    p = _cache_path(pid, ship_to, currency)
+    if os.path.exists(p) and time.time() - os.path.getmtime(p) < CACHE_TTL:
+        return json.load(open(p))
+    return None
+
+
+class Fetcher:
+    """Один браузер на поток, товары по одному с паузой (вежливый темп — иначе капча через ~25 страниц)."""
+    PAUSE = 2.5
+
+    def __init__(self, ship_to="UA", currency="USD"):
+        from playwright.sync_api import sync_playwright
+        self.ship_to, self.currency = ship_to, currency
+        self.pw = sync_playwright().start()
+        self.browser = self.pw.chromium.launch(headless=True, executable_path=CHROME)
+        self.ctx = self.browser.new_context(locale="en-US", user_agent=UA)
+        self.ctx.add_cookies([{"name": "aep_usuc_f", "value": region_cookie(ship_to, currency),
+                               "domain": ".aliexpress.com", "path": "/"}])
+        self.last = 0.0
+
+    def item(self, pid):
+        c = cached_item(pid, self.ship_to, self.currency)
+        if c:
+            return c
+        wait = self.PAUSE - (time.time() - self.last)
+        if wait > 0:
+            time.sleep(wait)
+        page = self.ctx.new_page()
+        got, punished = [], []
+        def on_resp(r):
+            if "punish" in r.url:
+                punished.append(r.url)
+            elif "mtop.aliexpress.pdp.pc.query" in r.url:
+                got.append(r)
+        page.on("response", on_resp)
+        try:
+            page.goto(f"https://www.aliexpress.com/item/{pid}.html", wait_until="domcontentloaded", timeout=45000)
+            res = None
+            for _ in range(30):
+                if punished:
+                    raise Captcha(pid)
+                for r in got:
+                    try:
+                        t = r.text()
+                        if len(t) > 5000:
+                            res = parse_item(_pdp_result(t)); break
+                    except Captcha:
+                        raise
+                    except Exception:
+                        pass
+                if res: break
+                page.wait_for_timeout(500)
+            if punished:
+                raise Captcha(pid)
+        finally:
+            self.last = time.time()
+            page.close()
+        if res:
+            res["id"] = pid
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            json.dump(res, open(_cache_path(pid, self.ship_to, self.currency), "w"), ensure_ascii=False)
+        return res
+
+    def close(self):
+        try:
+            self.browser.close(); self.pw.stop()
+        except Exception:
+            pass
+
+
 def item(pid, ship_to="UA", currency="USD", browser=None):
     from playwright.sync_api import sync_playwright
     own = browser is None
@@ -104,3 +173,58 @@ def item(pid, ship_to="UA", currency="USD", browser=None):
         browser.close(); pw.stop()
     if res: res["id"] = pid
     return res
+
+
+def search_url(url, ship_to="UA", currency="USD"):
+    """Читает готовую страницу выдачи (например, результат поиска по фото) простым HTTP."""
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "en-US",
+                                               "Cookie": "aep_usuc_f=" + region_cookie(ship_to, currency)})
+    html = urllib.request.urlopen(req, timeout=30).read().decode("utf8", "replace")
+    return _parse_search(html)
+
+
+def _parse_search(html):
+    out, seen = [], set()
+    for m in re.finditer(r'"productId":"(\d+)"', html):
+        if m.group(1) in seen:
+            continue
+        chunk = html[m.start():m.start() + 6000]
+        title = re.search(r'"displayTitle":"((?:[^"\\]|\\.)*)"', chunk)
+        price = re.search(r'"minPrice":([\d.]+)', chunk)
+        img = re.search(r'"imgUrl":"([^"]+)"', chunk)
+        if title and price:
+            seen.add(m.group(1))
+            src = img.group(1) if img else None
+            out.append({"id": m.group(1), "title": json.loads('"%s"' % title.group(1)),
+                        "list_price": float(price.group(1)),
+                        "img": ("https:" + src) if src and src.startswith("//") else src})
+    return out
+
+
+def image_search(path, ship_to="UA", currency="USD"):
+    """Поиск по фото, как кнопка-камера на сайте: загрузка картинки в браузере -> адрес выдачи -> товары."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        b = pw.chromium.launch(headless=True, executable_path=CHROME)
+        ctx = b.new_context(locale="en-US", user_agent=UA, viewport={"width": 1400, "height": 900})
+        ctx.add_cookies([{"name": "aep_usuc_f", "value": region_cookie(ship_to, currency),
+                          "domain": ".aliexpress.com", "path": "/"}])
+        pg = ctx.new_page()
+        pg.goto("https://www.aliexpress.com/", wait_until="domcontentloaded", timeout=45000)
+        btn = pg.wait_for_selector('[class*="picture-search-btn"]', timeout=20000)
+        for sel in ["text=Accept cookies", "text=Don't allow"]:
+            try: pg.click(sel, timeout=1500)
+            except Exception: pass
+        try: pg.keyboard.press("Escape")
+        except Exception: pass
+        btn.click(force=True)
+        inp = pg.wait_for_selector("input[type=file]", state="attached", timeout=10000)
+        inp.set_input_files(path)
+        pg.wait_for_url(re.compile(r"isNewImageSearch"), timeout=40000)
+        pg.wait_for_timeout(2500)
+        url, html = pg.url, pg.content()
+        b.close()
+    hits = _parse_search(html)
+    if len(hits) < 10:
+        hits = search_url(url, ship_to, currency)
+    return url, hits

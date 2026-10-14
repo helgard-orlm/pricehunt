@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pricehunt</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Ctext y=%2213%22 font-size=%2213%22%3E%24%3C/text%3E%3C/svg%3E">
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#16181d;--mute:#6b7280;--line:#e3e6ea;--acc:#0f766e;--acc2:#e6f4f2;--warn:#b42318;--warnbg:#fdecea;--human:#7c3aed;--humanbg:#f1ebfe}
+@media (prefers-color-scheme:dark){:root{--bg:#111316;--card:#1a1d22;--ink:#e8eaed;--mute:#9aa1ab;--line:#2a2f36;--acc:#2dd4bf;--acc2:#12302c;--warn:#f97066;--warnbg:#3a1714;--human:#b794f6;--humanbg:#2a1f42}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:4px 0 2px}
+.sub{color:var(--mute);margin:0 0 14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+label{font-weight:600;display:block;margin:0 0 6px}
+.step{color:var(--acc);font-weight:700;margin-right:6px}
+select,input[type=text],textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+textarea{min-height:80px}
+.row{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap}
+.row>*{flex:1 1 220px}
+#drop{border:2px dashed var(--line);border-radius:8px;padding:10px;text-align:center;color:var(--mute);cursor:pointer;min-height:44px;display:flex;align-items:center;justify-content:center;gap:10px}
+#drop img{max-height:64px;border-radius:6px}
+button{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:10px 18px;font:inherit;font-weight:600;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+button.ghost{background:transparent;color:var(--acc);border:1px solid var(--acc)}
+#log{font:12px/1.4 ui-monospace,Consolas,monospace;max-height:220px;overflow:auto;white-space:pre-wrap;background:var(--bg);border-radius:8px;padding:8px;color:var(--mute)}
+.stats{display:flex;gap:18px;flex-wrap:wrap;align-items:baseline}
+.big{font-size:28px;font-weight:700}
+.mute{color:var(--mute)}
+.item{display:grid;grid-template-columns:96px 1fr auto;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.item:first-child{border-top:0}
+.item img{width:96px;height:96px;object-fit:cover;border-radius:8px;background:var(--bg)}
+.price{text-align:right;min-width:110px}
+.price .t{font-size:22px;font-weight:700}
+.bar{height:6px;background:var(--line);border-radius:3px;margin:4px 0 2px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--acc)}
+.title a{color:var(--ink);text-decoration:none;font-weight:600}
+.title a:hover{text-decoration:underline}
+.why{margin:4px 0 0;padding-left:18px;color:var(--mute);font-size:13px}
+.flag{background:var(--warnbg);color:var(--warn);border-radius:6px;padding:2px 7px;font-size:12.5px;display:inline-block;margin:4px 4px 0 0}
+.tag{border-radius:6px;padding:1px 7px;font-size:12px;font-weight:700;margin-right:6px}
+.tag.agent{background:var(--acc2);color:var(--acc)}
+.tag.human{background:var(--humanbg);color:var(--human)}
+#score{font-size:17px;font-weight:600}
+details summary{cursor:pointer;color:var(--mute)}
+.hist a{color:var(--acc)}
+@media (max-width:600px){.item{grid-template-columns:72px 1fr}.item img{width:72px;height:72px}.price{grid-column:2;text-align:left}}
+</style>
+</head>
+<body>
+<main>
+<h1>pricehunt</h1>
+<p class="sub">Настоящая цена = нужный вариант + доставка. Агент на открытой модели MiniCPM-V ищет на AliExpress, ты можешь соревноваться с ним своими ссылками.</p>
+
+<div class="card">
+  <label for="ship"><span class="step">1</span>Куда доставка</label>
+  <select id="ship"></select>
+</div>
+
+<div class="card">
+  <label><span class="step">2</span>Что ищем — название и/или фото</label>
+  <div class="row">
+    <input type="text" id="q" placeholder="например: 65W USB-C charger, ESP32 2.8 inch display">
+    <div id="drop" title="Нажми, перетащи или вставь картинку (Ctrl+V)"><span id="dropt">📷 фото товара</span></div>
+  </div>
+  <input type="file" id="file" accept="image/*" hidden>
+  <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <button id="go">Найти</button>
+    <button class="ghost" id="clearimg" hidden>убрать фото</button>
+    <span class="mute" id="status"></span>
+  </div>
+</div>
+
+<div class="card" id="runcard" hidden>
+  <div class="stats">
+    <div><div class="mute" title="Оценка модели MiniCPM по глубине поиска — не откалиброванная вероятность. Честность проверяется матчами «я против агента».">оценка агента: дешевле нет</div><div class="big" id="conf">—</div></div>
+    <div><div class="mute">глубина</div><div id="depth">—</div></div>
+    <div><div class="mute">утомление</div><div id="fat">—</div></div>
+  </div>
+  <div id="intent" class="mute" style="margin-top:8px"></div>
+  <details style="margin-top:8px" open><summary>журнал агента</summary><div id="log"></div></details>
+</div>
+
+<div class="card" id="rescard" hidden>
+  <div id="score"></div>
+  <div id="top"></div>
+</div>
+
+<div class="card" id="minecard" hidden>
+  <label><span class="step">3</span>Мои находки — вставь ссылки на товары (по одной в строке)</label>
+  <textarea id="mine" placeholder="https://www.aliexpress.com/item/1005....html"></textarea>
+  <div style="margin-top:10px"><button id="cmp">Сравнить с агентом</button></div>
+</div>
+
+<div class="card" id="rejcard" hidden>
+  <details><summary id="rejsum">отброшено</summary><div id="rej"></div></details>
+</div>
+
+<div class="card hist">
+  <details><summary>прошлые поиски</summary><div id="hist"></div></details>
+</div>
+</main>
+<script>
+const COUNTRIES=[["UA","Украина"],["PL","Польша"],["DE","Германия"],["LT","Литва"],["MD","Молдова"],["RO","Румыния"],["CZ","Чехия"],["SK","Словакия"],["HU","Венгрия"],["NL","Нидерланды"],["FR","Франция"],["ES","Испания"],["IT","Италия"],["GB","Великобритания"],["US","США"],["CA","Канада"],["IL","Израиль"],["KZ","Казахстан"],["GE","Грузия"],["AU","Австралия"]];
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let img64=null, job=null, timer=null;
+function lsGet(k){try{return localStorage.getItem(k)}catch(e){return null}}
+function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+$("ship").innerHTML=COUNTRIES.map(([c,n])=>`<option value="${c}">${n} (${c})</option>`).join("");
+$("ship").value=lsGet("ship")||"UA";
+$("ship").onchange=()=>lsSet("ship",$("ship").value);
+
+function setImage(file){
+  if(!file||!file.type.startsWith("image/"))return;
+  const r=new FileReader();
+  r.onload=()=>{img64=r.result;$("drop").innerHTML=`<img src="${img64}" alt="">`;$("clearimg").hidden=false};
+  r.readAsDataURL(file);
+}
+$("drop").onclick=()=>$("file").click();
+$("file").onchange=e=>setImage(e.target.files[0]);
+$("drop").ondragover=e=>{e.preventDefault()};
+$("drop").ondrop=e=>{e.preventDefault();setImage(e.dataTransfer.files[0])};
+document.addEventListener("paste",e=>{for(const it of e.clipboardData.items){if(it.type.startsWith("image/")){setImage(it.getAsFile());break}}});
+$("clearimg").onclick=()=>{img64=null;$("drop").innerHTML='<span>📷 фото товара</span>';$("clearimg").hidden=true};
+$("q").onkeydown=e=>{if(e.key==="Enter")$("go").click()};
+
+$("go").onclick=async()=>{
+  const q=$("q").value.trim();
+  if(!q&&!img64){$("status").textContent="напиши название или добавь фото";return}
+  $("go").disabled=true;$("status").textContent="запускаю…";
+  try{
+    const r=await fetch("/api/hunt",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ship_to:$("ship").value,query:q,image_b64:img64})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||r.status);
+    open_job(d.id);
+  }catch(e){$("status").textContent="ошибка: "+e.message;$("go").disabled=false}
+};
+
+function open_job(id){
+  job=id;history.replaceState(null,"","#"+id);
+  ["runcard","rescard"].forEach(x=>$(x).hidden=false);
+  clearInterval(timer);poll();timer=setInterval(poll,1500);
+}
+
+async function poll(){
+  if(!job)return;
+  let d;
+  try{const r=await fetch("/api/hunt/"+job);d=await r.json();if(!r.ok)throw new Error(d.error)}catch(e){$("status").textContent="нет связи: "+e.message;return}
+  render(d);
+  if(!d.busy){clearInterval(timer);$("go").disabled=false;$("cmp").disabled=false;loadHist()}
+}
+
+function pct(x){return x==null?"—":Math.round(x*100)+"%"}
+
+function render(d){
+  $("status").textContent=d.busy?`агент работает… ${d.elapsed}с`:(d.error?"ошибка: "+d.error:`готово за ${d.elapsed}с`)+(d.blocked?" · ⛔ AliExpress попросил капчу — поиск оборван, повтори позже":"");
+  $("conf").textContent=d.done?pct(d.confidence):"…";
+  const quiet=(()=>{let n=0;for(const l of [...(d.levels||[])].reverse()){if(l.improved)break;n++}return n})();
+  $("depth").innerHTML=`${(d.levels||[]).length} ур. · видел ${d.seen} · открыл ${d.checked}<div class="mute" style="font-size:12px">без находок подряд: ${quiet}</div>`;
+  $("fat").textContent=`${d.fatigue} / 3`;
+  if(d.intent)$("intent").innerHTML=`понял так: <b>${esc(d.intent.what)}</b>${d.intent.not&&d.intent.not.length?` · не путать с: ${esc(d.intent.not.join(", "))}`:""}`;
+  const lg=$("log"),atBottom=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;
+  lg.textContent=(d.log||[]).join("\n");if(atBottom)lg.scrollTop=lg.scrollHeight;
+  const top=d.top||[];
+  $("minecard").hidden=!d.done;
+  if(top.length){
+    const best=top[0];
+    const hum=top.filter(c=>c.source==="human"), ag=top.filter(c=>c.source!=="human");
+    let s=`Лучшее: <b>$${best.total.toFixed(2)}</b> `;
+    if(hum.length){
+      const hb=Math.min(...hum.map(c=>c.total)), ab=ag.length?Math.min(...ag.map(c=>c.total)):Infinity;
+      s+= hb<ab-0.005?`— <span class="tag human">ТЫ</span> нашёл дешевле агента на $${(ab-hb).toFixed(2)}`:
+          ab<hb-0.005?`— <span class="tag agent">АГЕНТ</span> нашёл дешевле тебя на $${(hb-ab).toFixed(2)}`:"— ничья";
+    }
+    $("score").innerHTML=s;
+  }else{$("score").innerHTML=d.done?"Ничего подходящего не нашлось.":""}
+  $("top").innerHTML=top.map((c,i)=>`
+   <div class="item">
+     <a href="${esc(c.url)}" target="_blank" rel="noopener"><img src="${esc(c.img||"")}" alt="" loading="lazy"></a>
+     <div>
+       <div class="title"><span class="tag ${c.source==="human"?"human":"agent"}">${c.source==="human"?"ТЫ":"АГЕНТ"}</span>${i+1}. <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a></div>
+       <ul class="why">${(c.why||[]).map(w=>`<li>${esc(w)}</li>`).join("")}</ul>
+       ${(c.flags||[]).map(f=>`<span class="flag">⚠ ${esc(f)}</span>`).join("")}
+     </div>
+     <div class="price"><div class="t">$${c.total.toFixed(2)}</div>
+       <div class="mute" style="font-size:12px">$${c.price.toFixed(2)} + $${c.shipping??"?"}</div>
+       <div class="bar"><i style="width:${Math.round((c.p_good||0)*100)}%"></i></div>
+       <div style="font-size:12px">оценка ${pct(c.p_good)}: хорошая покупка</div></div>
+   </div>`).join("");
+  const rej=d.rejected||[];
+  $("rejcard").hidden=!rej.length;
+  $("rejsum").textContent=`отброшено агентом: ${rej.length} (не тот товар)`;
+  $("rej").innerHTML=rej.map(c=>`<div style="padding:4px 0;border-top:1px solid var(--line)"><span class="tag ${c.source==="human"?"human":"agent"}">${c.source==="human"?"ТЫ":"АГЕНТ"}</span><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a><div class="mute" style="font-size:13px">${esc(c.note)}</div></div>`).join("");
+}
+
+$("cmp").onclick=async()=>{
+  const urls=$("mine").value.split(/\s+/).filter(u=>/aliexpress|^\d{10,}$/.test(u));
+  if(!urls.length){$("status").textContent="вставь ссылки AliExpress";return}
+  $("cmp").disabled=true;
+  const r=await fetch(`/api/hunt/${job}/mine`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({urls})});
+  const d=await r.json();
+  if(!r.ok){$("status").textContent="ошибка: "+d.error;$("cmp").disabled=false;return}
+  clearInterval(timer);timer=setInterval(poll,1500);
+};
+
+async function loadHist(){
+  try{
+    const h=await (await fetch("/api/history")).json();
+    $("hist").innerHTML=h.map(x=>`<div><a href="#${x.id}" onclick="open_job('${x.id}');return false">${esc(x.query)}</a> · ${x.ship_to} · ${x.best!=null?"$"+x.best.toFixed(2):"—"}${x.conf!=null?` · оценка агента ${Math.round(x.conf*100)}%`:""}${x.human?` · победил: ${x.winner==="human"?"ты":"агент"}`:""}</div>`).join("")||'<span class="mute">пока пусто</span>';
+  }catch(e){}
+}
+loadHist();
+if(location.hash.length>1)open_job(location.hash.slice(1));
+</script>
+</body>
+</html>
