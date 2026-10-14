@@ -14,7 +14,7 @@ import models
 
 SAME_MIN = 0.3          # ниже — «не такой, как на фото пользователя»
 MATCH_MIN = 0.7         # выше — «точное совпадение»: его название идёт в поисковые запросы
-THUMBS_PER_LEVEL = 12   # сколько миниатюр выдачи сравнивать с образцом за уровень
+THUMBS_PER_LEVEL = 6    # сравнение миниатюры с образцом ~7 с (замер 14.10), карточка ~20–35 с
 FREE_LEVELS = 3
 FATIGUE_LIMIT = 3
 MAX_LEVELS = 9
@@ -391,7 +391,7 @@ class Hunt:
             cand = [c for c in cand if c["id"] not in self.checked]
             cand.sort(key=lambda c: c["list_price"])
             if self.image and not self.cancelled:
-                photo_hits = [h for h in hits if h.get("_photo")][:8]
+                photo_hits = [h for h in hits if h.get("_photo")][:4]
                 self.score_thumbs(photo_hits + [c for c in cand if not c.get("_photo")])
                 self.queries_from_matches()
                 cand.sort(key=lambda c: (self.thumb_same.get(c["id"], 0.5) < SAME_MIN, c["list_price"]))
