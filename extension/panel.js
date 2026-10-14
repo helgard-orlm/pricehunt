@@ -222,7 +222,7 @@ function render(s) {
     <div class="item${c.tier === 2 ? " dim" : ""}">
       <a href="${esc(c.url)}" target="_blank" rel="noopener"><img src="${esc(c.img || "")}" alt="" loading="lazy"></a>
       <div>${tagOf(c)}<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a>
-        <div class="mute small">${esc(c.variant)}${c.same != null ? " · " + esc(t("like_ref", { p: pct(c.same) })) : ""}${c.p_good != null ? " · " + esc(t("score", { p: pct(c.p_good) })) : ""}</div>
+        <div class="mute small">${esc(c.variant)}${c.same != null ? " · " + esc(t("like_ref", { p: pct(c.same) })) : ""}</div>
         ${(c.flags || []).map((f) => `<span class="flag">⚠ ${esc(f)}</span>`).join("")}
       </div>
       <div><div class="total">${money(c.total, c.currency)}</div><div class="sub">${money(c.price, c.currency)} + ${money(c.shipping, c.currency)}</div></div>

@@ -355,11 +355,7 @@ export class Hunt {
     const head = `A shopper wants: ${this.intent.what}. Must have: ${this.intent.must.join(", ")}.\nChecked offers:\n${table}\n` +
       `Search depth: ${this.levels.length} levels, ${this.seen.size} listings seen, ${this.checked.size} opened; the last ${quiet} levels found nothing cheaper.` +
       (this.blocked ? " The search was cut short by a captcha." : "") + "\n";
-    for (let i = 0; i < rows.length; i++) {
-      if (this.cancelled) break;
-      rows[i].p_good = await this.model.yesProb(head + `\nIs offer #${i + 1} the right product at a good real price? Answer Yes or No.`);
-      this.publish();
-    }
+    // оценки «хорошая покупка» по каждой карточке убраны (helgard 14.10: скачут и только путают); остаётся одна — «дешевле нет»
     const best = this.best || rows[0];
     const bi = rows.indexOf(best) + 1 || 1;
     this.confidence = await this.model.yesProb(head + `\nConsidering how deep the search went, is offer #${bi} really the cheapest correct offer on the whole marketplace? Answer Yes or No.`);
