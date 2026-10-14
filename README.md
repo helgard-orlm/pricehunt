@@ -28,7 +28,7 @@ Other traps the agent handles:
 
 It follows the method a human bargain hunter uses (this is how the author finds parts by hand):
 
-1. **Search by photo.** Your product photo goes into AliExpress' own camera search.
+1. **Search by photo — of one item.** Listings often open with a collage of all sizes; a photo of the single item you chose is far more precise. pricehunt uses the chosen variant's own photo, otherwise asks the model which gallery photo shows one item; the panel shows the reference photo and you can click another. (With the single 100 W photo instead of the collage, MiniCPM-V recognised 8 matching COB panels in our cached listings instead of 0.) The photo goes into AliExpress' own camera search.
 2. **Keep only exact matches.** The model compares each thumbnail with your photo and opens only the ones that are the same product, cheapest first.
 3. **Search by the seller's verbatim title.** The title of an exact match is a better query than any words you'd invent, because many parts (an ESP32 board with a screen, a COB chip) have no common name.
 4. **Split the results itself** into free and paid shipping, sort each part by price and check the cheapest of each.

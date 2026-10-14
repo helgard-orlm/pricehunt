@@ -5,6 +5,9 @@ export const LANGS = { en: "English", ru: "Русский", uk: "Українс�
 
 const D = {
   en: {
+    photo_label: "Reference photo", photo_hint: "The agent searches by this photo. A photo of one item works better than a collage of all sizes — click another one if needed.",
+    a_photo_user: "reference photo: the one you picked", a_photo_variant: "reference photo: the chosen variant's own photo",
+    a_photo_pick: "reference photo: gallery #{n} looks like a single item ({p}%)", a_photo_first: "reference photo: the first gallery photo",
     tagline: "the same thing, cheaper",
     gear_title: "Model and language",
     setup_h: "Agent model",
@@ -63,6 +66,9 @@ const D = {
     captcha_timeout: "captcha not solved within 5 minutes", model_http: "the model answered {s}: {t}",
   },
   ru: {
+    photo_label: "Фото-образец", photo_hint: "Агент ищет по этому фото. Фото одного товара работает лучше коллажа всех размеров — нажми другое, если нужно.",
+    a_photo_user: "фото-образец: выбранное тобой", a_photo_variant: "фото-образец: своё фото выбранного варианта",
+    a_photo_pick: "фото-образец: №{n} из галереи — похоже на одиночный товар ({p}%)", a_photo_first: "фото-образец: первое фото галереи",
     tagline: "тот же товар — дешевле",
     gear_title: "Модель и язык",
     setup_h: "Модель агента",
@@ -121,6 +127,9 @@ const D = {
     captcha_timeout: "капча не решена за 5 минут", model_http: "модель ответила {s}: {t}",
   },
   uk: {
+    photo_label: "Фото-зразок", photo_hint: "Агент шукає за цим фото. Фото одного товару працює краще за колаж усіх розмірів — натисни інше, якщо потрібно.",
+    a_photo_user: "фото-зразок: обране тобою", a_photo_variant: "фото-зразок: власне фото обраного варіанта",
+    a_photo_pick: "фото-зразок: №{n} з галереї — схоже на одиночний товар ({p}%)", a_photo_first: "фото-зразок: перше фото галереї",
     tagline: "той самий товар — дешевше",
     gear_title: "Модель і мова",
     setup_h: "Модель агента",

@@ -271,10 +271,35 @@ export class Hunt {
     });
   }
 
+  // ---------- фото-образец: одиночное фото товара точнее коллажа всех размеров (наблюдение helgard 14.10) ----------
+  async refPhoto() {
+    if (this.ref.image) { this.log(t("a_photo_user")); return this.ref.image; }
+    if (this.ref.variant && this.ref.variant.img) { this.log(t("a_photo_variant")); this.on.refPhoto?.(this.ref.variant.img); return this.ref.variant.img; }
+    const gallery = (this.ref.item.main_images || []).slice(0, 6);
+    if (gallery.length > 1) {
+      const v = this.ref.variant ? this.ref.variant.attrs.map((a) => a.split(":").pop().trim()).join("; ") : "";
+      let best = null;
+      for (let i = 0; i < gallery.length && !this.cancelled; i++) {
+        const p = await this.model.yesProb(
+          "Does this photo show exactly ONE product item on its own (not several sizes or variants side by side, " +
+          "not a scene with other objects, not mostly text or a diagram)?" + (v ? ` The wanted variant is: ${v}.` : "") + " Answer Yes or No.",
+          [gallery[i]]).catch(() => null);
+        if (p != null && (!best || p > best.p)) best = { i, p };
+      }
+      if (best && best.p >= 0.5) {
+        this.log(t("a_photo_pick", { n: best.i + 1, p: Math.round(best.p * 100) }));
+        this.on.refPhoto?.(gallery[best.i]);
+        return gallery[best.i];
+      }
+    }
+    if (gallery.length) { this.log(t("a_photo_first")); this.on.refPhoto?.(gallery[0]); }
+    return gallery[0] || null;
+  }
+
   // ---------- главный цикл ----------
   async run() {
     this.log(t("a_model", { m: this.model.label() }));
-    const img = (this.ref.variant && this.ref.variant.img) || this.ref.item.main_images[0];
+    const img = await this.refPhoto();
     this.image = img ? await toJpegB64(img) : null;
     if (!this.image) throw new Error(t("a_no_photo"));
     await this.understand();

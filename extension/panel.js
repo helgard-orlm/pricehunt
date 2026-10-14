@@ -11,7 +11,8 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const money = (v, cur) => (v == null ? "?" : (!cur || cur === "USD" ? "$" + Number(v).toFixed(2) : Number(v).toFixed(2) + " " + cur));
 const pct = (x) => (x == null ? "—" : Math.round(x * 100) + "%");
 
-let probeSeq = 0;           // только последняя проверка адреса пишет результат (старая может закончиться позже)
+let probeSeq = 0;
+let refPhoto = null;        // фото-образец, выбранное кликом (null — агент выбирает сам)           // только последняя проверка адреса пишет результат (старая может закончиться позже)
 let cfg = null, product = null, pick = {}, hunt = null, logLines = [], readError = null, lastState = null;
 
 // ---------- язык ----------
@@ -101,6 +102,7 @@ async function loadProduct() {
     const item = saved && itemIdFromUrl(saved.url) === pid ? browse.itemFromRaw(pid, saved.raw) : await browse.item(pid);
     if (!item) throw new Error(t("no_data"));
     product = { id: pid, item, groups: variantGroups(item), urlSku: skuFromUrl(tab.url) };
+    refPhoto = null;
     const start = item.variants.find((v) => v.sku === product.urlSku) || item.variants.find((v) => v.salable !== false) || item.variants[0];
     pick = {};
     for (const g of product.groups) {
@@ -126,13 +128,18 @@ function renderProduct() {
   if (!product) { $("noproduct").textContent = readError ? t("read_fail", { e: readError }) : t("noproduct"); return; }
   const it = product.item, v = chosen();
   $("ptitle").textContent = it.title;
-  $("pimg").src = (v && v.img) || it.main_images[0] || "";
+  $("pimg").src = refPhoto || (v && v.img) || it.main_images[0] || "";
   $("groups").innerHTML = product.groups.map((g) => `<div class="gname">${esc(g.name)}</div>` + g.values.map((x) => {
     const test = { ...pick, [g.name]: x.value };
     const exists = it.variants.some((vv) => product.groups.every((gg) => vv.attrs.includes(`${gg.name}: ${test[gg.name]}`)));
     return `<span class="chip${pick[g.name] === x.value ? " on" : ""}${exists ? "" : " off"}" data-g="${esc(g.name)}" data-v="${esc(x.value)}">${esc(x.value)}</span>`;
   }).join("")).join("");
-  $("groups").querySelectorAll(".chip").forEach((c) => (c.onclick = () => { pick[c.dataset.g] = c.dataset.v; renderProduct(); }));
+  $("groups").querySelectorAll(".chip").forEach((c) => (c.onclick = () => { pick[c.dataset.g] = c.dataset.v; refPhoto = null; renderProduct(); }));
+  // лента фото: своё фото варианта + галерея; подсвечено то, по которому будет искать агент
+  const photos = [...new Set([v && v.img, ...it.main_images].filter(Boolean))];
+  const cur = refPhoto || (v && v.img) || null;
+  $("photos").innerHTML = photos.map((u) => `<img src="${esc(u)}" data-u="${esc(u)}" class="${u === cur ? "on" : ""}" alt="">`).join("");
+  $("photos").querySelectorAll("img").forEach((im) => (im.onclick = () => { refPhoto = im.dataset.u; renderProduct(); }));
   const ships = it.shipping.filter((s) => s.fee != null).map((s) => s.fee);
   const ship = ships.length ? Math.min(...ships) : null;
   if (v) {
@@ -155,9 +162,10 @@ $("go").onclick = async () => {
   $("list").innerHTML = ""; $("verdict").textContent = "";
   $("go").disabled = true; $("stop").hidden = false;
   hunt = new Hunt({
-    ref: { id: product.id, item: product.item, variant: product.groups.length ? v : null },
+    ref: { id: product.id, item: product.item, variant: product.groups.length ? v : null, image: refPhoto },
     model: new Model(cfg),
-    on: { log, update: render, captcha: (on) => ($("captcha").hidden = !on) },
+    on: { log, update: render, captcha: (on) => ($("captcha").hidden = !on),
+          refPhoto: (u) => { $("photos").querySelectorAll("img").forEach((im) => im.classList.toggle("on", im.dataset.u === u)); $("pimg").src = u; } },
   });
   try { await hunt.run(); }
   catch (e) { log(t("error", { e: e.message })); }

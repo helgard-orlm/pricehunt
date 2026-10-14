@@ -1,7 +1,7 @@
 """gemma4:31b-cloud (Ollama на gpu104) против MiniCPM-V 4.7: (А) 49 фото вариантов, (Б) «тот же товар, что образец»."""
 import base64, json, re, sys, time, glob, os, urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL = sys.argv[1] if len(sys.argv) > 1 else "gemma4:31b-cloud"
+MODEL = next((a for a in sys.argv[1:] if not a.startswith("--")), "gemma4:31b-cloud")
 OLL = "http://192.168.1.104:11434/v1/chat/completions"
 MCP = "http://192.168.1.104:8920/v1/chat/completions"
 
@@ -37,7 +37,7 @@ PROMPT = ("You check marketplace listings. Look at the image only.\n"
           "WALL_CHARGER (power brick only), CABLE (cable only), CHARGER_AND_CABLE, CAR_CHARGER, ADAPTER_CONNECTOR, OTHER.\n"
           "Then on a second line, the wattage printed on the product if visible, else NONE.")
 lab = lambda s: (re.search(r"WALL_CHARGER|CHARGER_AND_CABLE|CAR_CHARGER|ADAPTER_CONNECTOR|CABLE|OTHER", s) or [None])[0]
-ref = json.load(open(ROOT + "/data/vis_minicpm_ok.json"))
+ref = json.load(open(ROOT + "/data/vis_minicpm_ok.json")) if "--skip-a" not in sys.argv else []
 ok = 0; miss = []; secs = []
 for c in ref:
     t = time.time()
@@ -47,7 +47,7 @@ for c in ref:
     want, got = lab(c["model"]), lab(a)
     if want == got: ok += 1
     else: miss.append((c["variant"], c["price"], want, got, a.replace("\n", " | ")[:60]))
-print(f"А) фото вариантов: {ok}/{len(ref)} совпало с эталоном, {sum(secs)/len(secs):.1f} с/фото", flush=True)
+if ref: print(f"А) фото вариантов: {ok}/{len(ref)} совпало с эталоном, {sum(secs)/len(secs):.1f} с/фото", flush=True)
 for m in miss: print("   промах:", m, flush=True)
 
 # ---------- Б: тот же товар, что образец ----------
@@ -56,11 +56,15 @@ SAME = ("Image 1 is the product the shopper wants. Image 2 is a marketplace offe
         "same connection type (ignore background, text labels, colour of light, and which size/power is shown)? Answer Yes or No.")
 items = {os.path.basename(f).split("_")[0]: json.load(open(f)) for f in glob.glob(ROOT + "/data/cache/*.json")}
 refs = {"COB 220V": "1005007439009437"}
+# образец = одиночное фото выбранного варианта (как в расширении), не коллаж галереи: COB — вариант 100W
+REF_VARIANT = {"1005007439009437": "100W"}
 esp = [i for i, d in items.items() if re.search(r"ESP-?01", d.get("title", ""), re.I)]
 if esp: refs["ESP-01 adapter"] = esp[0]
 mode = set()
 for name, rid in refs.items():
-    rimg = img_b64(items[rid]["main_images"][0])
+    vimg = [v["img"] for v in items[rid]["variants"] if v.get("img") and REF_VARIANT.get(rid, "") in " ".join(v["attrs"])]
+    rimg = img_b64(vimg[0] if vimg else items[rid]["main_images"][0])
+    print(f"   образец {name}: {'фото варианта' if vimg else 'фото галереи'}", flush=True)
     kw = "COB" if "COB" in name else "ESP"
     cands = [i for i, d in items.items() if i != rid and kw in d.get("title", "").upper() and d.get("main_images")][:25]
     agree = n = 0; rows = []
