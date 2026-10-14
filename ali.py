@@ -206,10 +206,12 @@ def search_url(url, ship_to="UA", currency="USD"):
 
 def _parse_search(html):
     out, seen = [], set()
-    for m in re.finditer(r'"productId":"(\d+)"', html):
+    starts = [m for m in re.finditer(r'"productId":"(\d+)"', html)]
+    for k, m in enumerate(starts):
         if m.group(1) in seen:
             continue
-        chunk = html[m.start():m.start() + 6000]
+        end = starts[k + 1].start() if k + 1 < len(starts) else m.start() + 8000
+        chunk = html[m.start():min(end, m.start() + 8000)]
         title = re.search(r'"displayTitle":"((?:[^"\\]|\\.)*)"', chunk)
         price = re.search(r'"minPrice":([\d.]+)', chunk)
         img = re.search(r'"imgUrl":"([^"]+)"', chunk)
@@ -218,7 +220,11 @@ def _parse_search(html):
             src = img.group(1) if img else None
             out.append({"id": m.group(1), "title": json.loads('"%s"' % title.group(1)),
                         "list_price": float(price.group(1)),
-                        "img": ("https:" + src) if src and src.startswith("//") else src})
+                        "img": ("https:" + src) if src and src.startswith("//") else src,
+                        # метки карточки: бесплатная доставка / цена для новичков / «лучшая цена такого же» по версии сайта
+                        "free_ship": "Free_Shipping" in chunk or "platformFreeShipping" in chunk,
+                        "welcome": "welcomedeal" in chunk,
+                        "same_style_best": "SAME_STYLE_PRICE_BEST" in chunk})
     return out
 
 

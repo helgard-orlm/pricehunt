@@ -19,7 +19,8 @@ THUMBS_PER_LEVEL = 6    # сравнение миниатюры с образц�
 FREE_LEVELS = 3
 FATIGUE_LIMIT = 3
 MAX_LEVELS = 9
-PER_LEVEL = 6          # сколько новых кандидатов открывать на уровне
+PER_LEVEL = 8          # сколько кандидатов открывать на уровне (helgard открывает ~10)
+PER_VIEW = 5           # метод helgard: сколько самых дешёвых проверять в каждой части выдачи (бесплатная / платная доставка)
 TIME_BUDGET = 15 * 60  # секунд
 
 
@@ -148,6 +149,30 @@ class Hunt:
     # ---------- уровни поиска ----------
     def level_plan(self, n):
         """Что делаем на уровне n (1..). Возвращает [(описание, функция-поиск)]."""
+        if self.image:
+            return self.helgard_plan(n)
+        return self.text_plan(n)
+
+    def helgard_plan(self, n):
+        """Как ищет helgard: фото -> точные совпадения -> дословное название -> выдача по доставке -> новый лучший -> снова."""
+        plan = []
+        if n == 1:
+            plan.append(("поиск по фото образца", self._photo_search_user))
+            if self.user_text or (self.query and not self.ref_raw):
+                t = self.user_text or self.query
+                plan.append((f'твой текст «{t}»', lambda t=t: self._search(t, sort="default")))
+            return plan
+        title = self.next_exact_title()
+        if title:
+            plan.append((f'дословное название совпадения «{title[:70]}»', lambda t=title: self._search(t, sort="default")))
+            plan.append((f'то же название, по цене', lambda t=title: self._search(t, sort="price_asc")))
+        if self.best and self.best.get("img") and n % 2 == 1:
+            plan.append(("поиск по фото нового лучшего", self._photo_search_best))
+        if not title:
+            plan += self.text_plan(n)[:2]   # дословные названия кончились — запасные запросы
+        return plan
+
+    def text_plan(self, n):
         q = self.intent["queries"]
         plan = []
         if n == 1:
@@ -184,6 +209,25 @@ class Hunt:
                 plan.append(("похожие по фото нового лучшего", self._photo_search_best))
         return plan
 
+    def next_exact_title(self):
+        """Метод helgard: дословное название одного из точных совпадений -> поиск по нему."""
+        used = getattr(self, "_titles_used", set())
+        self._titles_used = used
+        pool = sorted([c for c in self.checked.values() if not c.get("rejected") and c["source"] != "ref"
+                       and self.tier(c) == 0], key=lambda c: c["total"])
+        titles = [c["title"] for c in pool]
+        titles += [h["title"] for h in sorted((self.seen[i] for i, p in self.thumb_same.items()
+                                               if p >= EXACT_MIN and i in self.seen), key=lambda h: h["list_price"])]
+        if self.ref_raw:
+            titles.append(self.ref_raw.get("title") or "")
+        for t in titles:
+            clean = re.sub(r"[^\w\s.,+/-]", " ", t or "", flags=re.U)
+            clean = " ".join(clean.split()[:16])
+            if clean and clean.lower() not in used:
+                used.add(clean.lower())
+                return clean
+        return None
+
     def _fresh(self, qs):
         return [x for x in qs if x and x.lower() not in self.used_queries and x.lower() != self.query.lower()]
 
@@ -192,9 +236,18 @@ class Hunt:
         if page == 1:
             self.used_queries.add(q.lower())
         f = self._fetcher()
-        if hasattr(f, "search"):
-            return f.search(q, self.ship_to, sort=sort, page=page)
-        return ali.search(q, self.ship_to, sort=sort, page=page)
+        run = (lambda srt, pg: f.search(q, self.ship_to, sort=srt, page=pg)) if hasattr(f, "search") \
+            else (lambda srt, pg: ali.search(q, self.ship_to, sort=srt, page=pg))
+        res = run(sort, page)
+        if not res and (sort != "default" or page != 1):
+            # AliExpress иногда нарочно отдаёт пусто на сортировку/фильтр — это отказ, не «товаров нет»
+            self.log(f"  AliExpress отказал в сортировке/странице для «{q[:50]}» — беру обычную выдачу и сортирую сам")
+            res = run("default", 1)
+        if sort == "price_asc" and res:
+            pr = [x["list_price"] for x in res]
+            if sum(1 for a, b in zip(pr, pr[1:]) if b < a - 0.005) > len(pr) // 10:
+                self.log(f"  выдача «по цене» пришла не по порядку — сортирую сам")
+        return res
 
     def _photo_search(self, jpeg):
         f = self._fetcher()
@@ -318,9 +371,28 @@ class Hunt:
                 "currency": it.get("currency") or "USD", "same": same,
                 "n_variants": len(variants)}
 
+    def helgard_pick(self, hits):
+        """Выдача уровня -> две части (бесплатная / платная доставка), каждая по цене (сами, сайту не верим) ->
+        миниатюры PER_VIEW самых дешёвых каждой части сравниваем с образцом -> открываем точно такие, дешёвые первыми."""
+        pool = [h for h in hits if h["id"] not in self.checked]
+        free = sorted([h for h in pool if h.get("free_ship")], key=lambda h: h["list_price"])
+        paid = sorted([h for h in pool if not h.get("free_ship")], key=lambda h: h["list_price"])
+        look = free[:PER_VIEW] + paid[:PER_VIEW]
+        self.log(f"  выдача: бесплатная доставка {len(free)}, платная {len(paid)} — проверяю по {PER_VIEW} самых дешёвых в каждой")
+        self.score_thumbs(look)
+        self.queries_from_matches()
+        exact = [h for h in pool if self.thumb_same.get(h["id"], 0) >= EXACT_MIN]
+        # точные из прошлых уровней, которые ещё не открывали, тоже идут в дело
+        exact += [self.seen[i] for i, p in self.thumb_same.items() if p >= EXACT_MIN and i in self.seen
+                  and i not in self.checked and self.seen[i] not in exact]
+        exact.sort(key=lambda h: h["list_price"])
+        pick = exact[:PER_LEVEL]
+        self.log(f"  точно таких по миниатюре {len(exact)}, открываю {len(pick)} (дешёвые первыми)")
+        return pick
+
     def score_thumbs(self, hits):
         """Сравнить миниатюры выдачи с образцом (без открытия карточек)."""
-        todo = [h for h in hits if h.get("img") and h["id"] not in self.thumb_same][:THUMBS_PER_LEVEL]
+        todo = [h for h in hits if h.get("img") and h["id"] not in self.thumb_same][:max(THUMBS_PER_LEVEL, 2 * PER_VIEW)]
         for h in todo:
             if self.cancelled:
                 break
@@ -441,22 +513,13 @@ class Hunt:
                 for x in h: self.seen.setdefault(x["id"], x)
                 self.log(f"  {desc}: {len(h)} товаров, новых {len(new)}")
                 hits += new
-            cand = self.prefilter(hits)
-            cand = [c for c in cand if c["id"] not in self.checked]
-            cand.sort(key=lambda c: c["list_price"])
-            if self.image and not self.cancelled:
-                photo_hits = [h for h in hits if h.get("_photo")][:4]
-                self.score_thumbs(photo_hits + [c for c in cand if not c.get("_photo")])
-                self.queries_from_matches()
-                exact = [h for h in (photo_hits + hits) if self.thumb_same.get(h["id"], 0) >= EXACT_MIN
-                         and h["id"] not in self.checked]
-                ids = {c["id"] for c in cand}
-                cand += [h for h in dict((h["id"], h) for h in exact).values() if h["id"] not in ids]
-                cand.sort(key=lambda c: (-(self.thumb_same.get(c["id"], 0.5) >= EXACT_MIN),
-                                         self.thumb_same.get(c["id"], 0.5) < SAME_MIN, c["list_price"]))
-            pick = cand[:PER_LEVEL]
-            self.log(f"  подходят по названию {len(cand)}, открываю {len(pick)}"
-                     + (" (сначала похожие на твоё фото, потом дешёвые)" if self.image else " самых дешёвых"))
+            if self.image:
+                pick = self.helgard_pick(hits)          # есть образец: метод helgard (миниатюры, две части выдачи)
+            else:
+                cand = [c for c in self.prefilter(hits) if c["id"] not in self.checked]
+                cand.sort(key=lambda c: c["list_price"])
+                pick = cand[:PER_LEVEL]
+                self.log(f"  подходят по названию {len(cand)}, открываю {len(pick)} самых дешёвых")
             before = self.best["total"] if self.best else math.inf
             _, opened = self.open_items([c["id"] for c in pick])
             if self.image:
