@@ -1,6 +1,6 @@
 // Боковая панель pricehunt: товар с открытой вкладки, выбор варианта, агент и его прогресс — всё здесь.
 import { Model, loadSettings, saveSettings, listOllama, listOpenAI } from "./lib/model.js";
-import { variantGroups, itemIdFromUrl, skuFromUrl } from "./lib/parse.js";
+import { variantGroups, itemIdFromUrl, skuFromUrl, cheapestShip } from "./lib/parse.js";
 import * as browse from "./lib/browse.js";
 import { Hunt } from "./lib/agent.js";
 import { t, LANGS, getLang, setLang, applyDom } from "./lib/i18n.js";
@@ -140,10 +140,9 @@ function renderProduct() {
   const cur = refPhoto || (v && v.img) || null;
   $("photos").innerHTML = photos.map((u) => `<img src="${esc(u)}" data-u="${esc(u)}" class="${u === cur ? "on" : ""}" alt="">`).join("");
   $("photos").querySelectorAll("img").forEach((im) => (im.onclick = () => { refPhoto = im.dataset.u; renderProduct(); }));
-  const ships = it.shipping.filter((s) => s.fee != null).map((s) => s.fee);
-  const ship = ships.length ? Math.min(...ships) : null;
   if (v) {
     const p = v.welcome_deal && v.original ? v.original : v.price;
+    const ship = cheapestShip(it.shipping, p).fee;
     $("pprice").innerHTML = `<b>${money(p, it.currency)}</b> + ${t("shipping")} ${money(ship, it.currency)} = <b>${money(p + (ship || 0), it.currency)}</b>` +
       (v.welcome_deal ? ` <span class="mute">${esc(t("welcome_ignored", { p: money(v.price, it.currency) }))}</span>` : "");
   } else $("pprice").textContent = t("no_combo");

@@ -9,6 +9,7 @@
 import * as browse from "./browse.js";
 import { toJpegB64 } from "./model.js";
 import { t } from "./i18n.js";
+import { cheapestShip } from "./parse.js";
 
 export const SAME_MIN = 0.3;      // ниже — «другой», чем образец
 export const EXACT_MIN = 0.7;     // от этого — «точно такой»; лучшим может быть только он
@@ -108,8 +109,6 @@ export class Hunt {
     let variants = (source === "ref" && this.ref.variant ? [this.ref.variant] : it.variants)
       .filter((v) => v.salable !== false && v.price);
     if (!variants.length) return null;
-    const ships = it.shipping.filter((s) => s.fee != null);
-    const ship = ships.length ? ships.reduce((a, b) => (b.fee < a.fee ? b : a)) : null;
     let ans;
     if (source === "ref") ans = { match: [0], note: t("a_your_variant") };
     else {
@@ -162,7 +161,7 @@ export class Hunt {
         flags.push(t("a_not_like", { p: Math.round(same * 100) }) + (diff ? `: ${diff}` : ""));
       }
     }
-    const fee = ship ? ship.fee : null;
+    const { ship, fee } = cheapestShip(it.shipping, real(v));
     return {
       id: it.id, title: it.title, url, source, rejected: false, img, same, flags, note: ans.note || "", bundle,
       variant: v.attrs.join("; ") || "default", price: real(v), shown_price: v.price,

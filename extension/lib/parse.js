@@ -60,6 +60,11 @@ export function parseItem(r) {
     const b = li.bizData || {};
     shipping.push({
       company: b.company, fee: b.shippingFee === "free" ? 0 : b.displayAmount, fee_kind: b.shippingFee,
+      // Choice: сайт пишет «Free shipping», если shippingFee=free ИЛИ порог бесплатной доставки нулевой (thresholdOverZero=no),
+      // хотя displayAmount=0.49 (правило из самих данных страницы: displayCondition "shippingFee=free||thresholdOverZero!=yes").
+      // При пороге > 0 — бесплатно, если цена товара не ниже порога (logisticsComposeThreshold). Замер 14.10, зарядка helgard.
+      free_now: b.shippingFee === "free" || b.thresholdOverZero === "no",
+      threshold: b.thresholdOverZero === "yes" ? money(b.logisticsComposeThreshold) : null,
       days: [b.deliveryDayMin, b.deliveryDayMax], ship_to: b.shipToCode, from: b.shipFrom,
     });
   }
@@ -86,6 +91,24 @@ export function variantGroups(item) {
     }
   }
   return [...groups].map(([name, values]) => ({ name, values }));
+}
+
+/** Стоимость способа доставки для товара по цене price — как её покажет сайт. */
+export function feeFor(s, price) {
+  if (!s || s.fee == null) return null;
+  if (s.free_now) return 0;
+  if (s.threshold != null && price != null && price >= s.threshold) return 0;
+  return s.fee;
+}
+
+/** Самый дешёвый способ доставки для цены price: {ship, fee}. */
+export function cheapestShip(shipping, price) {
+  let best = null;
+  for (const s of shipping || []) {
+    const f = feeFor(s, price);
+    if (f != null && (!best || f < best.fee)) best = { ship: s, fee: f };
+  }
+  return best || { ship: null, fee: null };
 }
 
 /** HTML страницы выдачи (обычный поиск или поиск по фото) -> товары с метками карточки. */
