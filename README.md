@@ -30,7 +30,8 @@ Other traps the agent handles:
 It follows the method a human bargain hunter uses (this is how the author finds parts by hand):
 
 1. **Search by photo — of one item.** Listings often open with a collage of all sizes; a photo of the single item you chose is far more precise. pricehunt uses the chosen variant's own photo, otherwise asks the model which gallery photo shows one item; the panel shows the reference photo and you can click another. (On the same 25 cached COB listings, MiniCPM-V called 0 of them a match when the reference was the all-sizes collage, and 8 when it was the single 100 W photo.) The photo goes into AliExpress' own camera search.
-2. **Keep only exact matches.** The model compares each thumbnail with your photo and opens only the ones that are the same product, cheapest first.
+2. **Open likely matches, label only true ones.** A thumbnail only has to be the same *type* to be opened. The EXACT MATCH label needs a stricter question on the opened card's variant photo: the *same model* (shape, ports, display, printed power), not another model of the same brand. On 16 Essager chargers from one search, "same type" accepted 7 of 11 other models, "same model" accepted 1 of 11, and both kept all 5 true matches.
+   **Keep only exact matches.** The model compares each thumbnail with your photo and opens only the ones that are the same product, cheapest first.
 3. **Search by the seller's verbatim title.** The title of an exact match is a better query than any words you'd invent, because many parts (an ESP32 board with a screen, a COB chip) have no common name.
 4. **Split the results itself** into free and paid shipping, sort each part by price and check the cheapest of each.
 5. **Open the product and read every variant.** The model picks the variant that is really the wanted thing (not the cable, not the car charger), and checks the hard specs from your chosen variant (100W stays 100W) and the plug for your country.

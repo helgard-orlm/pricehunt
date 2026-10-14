@@ -5,6 +5,7 @@ export const LANGS = { en: "English", ru: "Русский", uk: "Українс�
 
 const D = {
   en: {
+    same_model: "same model {p}",
     a_spec_first: "cards with {s} in the title first: {n} of {m}",
     tag_bundle: "BUNDLE DEAL", a_bundle_flag: "Bundle deal ({n}): the extra discount needs at least 3 different items from Bundle deals",
     a_bundle_seen: "bundle deals in these results: {n}",
@@ -69,6 +70,7 @@ const D = {
     captcha_timeout: "captcha not solved within 5 minutes", model_http: "the model answered {s}: {t}",
   },
   ru: {
+    same_model: "та же модель {p}",
     a_spec_first: "сначала карточки с {s} в названии: {n} из {m}",
     tag_bundle: "КОМПЛЕКТ", a_bundle_flag: "Предложение комплектов ({n}): доп. скидка — только при заказе минимум 3 разных товаров из комплектов",
     a_bundle_seen: "предложений комплектов в выдаче: {n}",
@@ -133,6 +135,7 @@ const D = {
     captcha_timeout: "капча не решена за 5 минут", model_http: "модель ответила {s}: {t}",
   },
   uk: {
+    same_model: "та сама модель {p}",
     a_spec_first: "спершу картки з {s} у назві: {n} з {m}",
     tag_bundle: "КОМПЛЕКТ", a_bundle_flag: "Пропозиція комплектів ({n}): дод. знижка — лише при замовленні щонайменше 3 різних товарів з комплектів",
     a_bundle_seen: "пропозицій комплектів у видачі: {n}",

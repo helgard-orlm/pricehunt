@@ -98,10 +98,22 @@ export class Hunt {
       ["data:image/jpeg;base64," + this.image, img]).catch(() => null);
   }
 
+  // «точно такой» — только по строгому «та же модель» на открытой карточке; «тот же тип» даёт максимум «похожий»
+  // (замер 14.10, 16 зарядок Essager: «тип» принял 7 из 11 других моделей, «модель» — 1 из 11; своих 5 из 5 оба)
+  async sameModelAsRef(img) {
+    return this.model.yesProb(
+      "Image 1 is the exact product the shopper wants. Image 2 is a marketplace offer (it may show several items or plug types). " +
+      "Is the product in image 2 the SAME MODEL as in image 1 — same body shape and design details, same ports and their layout, " +
+      "same display or lights, same printed power rating — not just a similar product of the same kind or another model of the same brand? " +
+      "Ignore background, advertising text and plug type. Answer Yes or No.",
+      ["data:image/jpeg;base64," + this.image, img]).catch(() => null);
+  }
+
   tier(c) {
     if (c.source === "ref") return 0;
+    if (c.model != null) return c.model >= EXACT_MIN ? 0 : (c.same == null || c.same >= SAME_MIN) ? 1 : 2;
     if (c.same == null) return 1;
-    return c.same >= EXACT_MIN ? 0 : c.same >= SAME_MIN ? 1 : 2;
+    return c.same >= SAME_MIN ? 1 : 2;
   }
 
   // ---------- проверка карточки ----------
@@ -151,10 +163,11 @@ export class Hunt {
     const bundle = this.seen.get(it.id)?.bundle || null;     // метка «Пропозиції комплектів» с карточки выдачи
     if (bundle && source !== "ref") flags.push(t("a_bundle_flag", { n: bundle }));
     const img = v.img || it.main_images[0] || null;
-    let same = null;
+    let same = null, model = null;
     if (source !== "ref" && img && this.image) {
       same = this.thumbFor(it.id);   // миниатюра уже дала уверенное «да» — второй раз не сравниваем
       if (same == null || same < 0.99) same = await this.sameAsRef(img);
+      if (same == null || same >= SAME_MIN) model = await this.sameModelAsRef(img);
       if (same != null && same < SAME_MIN) {
         const diff = await this.model.ask("Image 1 is what the shopper wants, image 2 is an offer. In max 15 words: the main difference?",
           ["data:image/jpeg;base64," + this.image, img], 50).catch(() => "");
@@ -163,7 +176,7 @@ export class Hunt {
     }
     const { ship, fee } = cheapestShip(it.shipping, real(v));
     return {
-      id: it.id, title: it.title, url, source, rejected: false, img, same, flags, note: ans.note || "", bundle,
+      id: it.id, title: it.title, url, source, rejected: false, img, same, model, flags, note: ans.note || "", bundle,
       variant: v.attrs.join("; ") || "default", price: real(v), shown_price: v.price,
       shipping: fee, ship_company: ship?.company, ship_days: ship?.days,
       total: Math.round((real(v) + (fee || 0)) * 100) / 100, currency: it.currency || this.cur(),
@@ -366,7 +379,7 @@ export class Hunt {
     let quiet = 0;
     for (const lv of [...this.levels].reverse()) { if (lv.improved) break; quiet++; }
     const table = rows.map((c, i) => `#${i + 1} ${c.total} total (item ${c.price} + shipping ${c.shipping}) — variant «${c.variant}» — ${c.title.slice(0, 90)}` +
-      (c.same != null ? ` — looks like the reference: ${Math.round(c.same * 100)}%` : "") + (c.source === "ref" ? " — the shopper's own page" : "") +
+      (c.model != null ? ` — same model as the reference: ${Math.round(c.model * 100)}%` : c.same != null ? ` — looks like the reference: ${Math.round(c.same * 100)}%` : "") + (c.source === "ref" ? " — the shopper's own page" : "") +
       (c.flags.length ? ` — warnings: ${c.flags.join("; ")}` : "")).join("\n");
     const head = `A shopper wants: ${this.intent.what}. Must have: ${this.intent.must.join(", ")}.\nChecked offers:\n${table}\n` +
       `Search depth: ${this.levels.length} levels, ${this.seen.size} listings seen, ${this.checked.size} opened; the last ${quiet} levels found nothing cheaper.` +
