@@ -11,4 +11,4 @@ h.sameAsRef = async (img) => { looked.push(img); return 0; };
 for (const x of hits) h.seen.set(x.id, x);
 await h.pick(hits);
 const target = hits.find((x) => x.id === '1005008033224158');
-console.log('спецификации:', h.pickSpecs(), '| просмотрено миниатюр:', looked.length, '| находка среди них:', looked.includes(target.img));
+console.log("trace:", JSON.stringify(h.trace).slice(0, 400));

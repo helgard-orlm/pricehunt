@@ -52,11 +52,14 @@ export class Hunt {
     this.seen = new Map(); this.checked = new Map(); this.thumb = new Map();
     this.levels = []; this.fatigue = 0; this.best = null; this.top = [];
     this.titlesUsed = new Set(); this.cancelled = false; this.blocked = false; this.done = false;
+    this.trace = [];
     this.confidence = null; this.t0 = Date.now(); this.image = null; this.intent = null; this.refEval = null;
     this.hooks = { onCaptcha: () => { this.log(t("a_captcha")); this.on.captcha?.(true); } };
   }
 
   log(t) { this.on.log?.(t); }
+  /** Подробный журнал для разработчика: каждое решение агента данными (что искал, что вернулось, что открыл и почему). */
+  tr(ev, data = {}) { this.trace.push({ ms: Date.now() - this.t0, ev, ...data }); }
   cur() { return this.ref.item.currency || "USD"; }
   m(v) { return money(v, this.cur()); }
   elapsed() { return Math.round((Date.now() - this.t0) / 1000); }
@@ -86,6 +89,7 @@ export class Hunt {
     intent.queries = (intent.queries || []).filter(Boolean).slice(0, 6);
     if (v) intent.must.push("exactly this variant: " + v);
     this.intent = intent;
+    this.tr("intent", { intent });
     this.log(t("a_understood", { what: intent.what }) + (intent.not.length ? t("a_not", { x: intent.not.join(", ") }) : ""));
   }
 
@@ -192,13 +196,18 @@ export class Hunt {
       let it;
       try { it = await browse.item(pid, this.hooks); }
       catch (e) {
-        if (e instanceof browse.Captcha) { this.blocked = true; this.log(t("a_captcha_stop")); break; }
+        if (e instanceof browse.Captcha) { this.blocked = true; this.tr("captcha_stop", { id: pid }); this.log(t("a_captcha_stop")); break; }
+        this.tr("open_error", { id: pid, error: e.message });
         this.log(`  ${t("a_not_opened", { id: pid })}: ${e.message}`); continue;
       }
       this.on.captcha?.(false);
       if (!it) { this.log("  " + t("a_not_opened", { id: pid })); continue; }
       opened++;
       const ev = await this.evaluate(it, source);
+      this.tr("card", { id: pid, source, title: it.title, opened_as: it.variants.length + " variants",
+        variants: it.variants.slice(0, 40).map((v) => [v.attrs.join("; "), v.price, v.welcome_deal ? 1 : 0, v.salable === false ? 0 : 1]),
+        shipping: it.shipping, result: ev ? { rejected: ev.rejected, note: ev.note, variant: ev.variant, price: ev.price, shipping: ev.shipping,
+          total: ev.total, same_type: ev.same, same_model: ev.model, tier: ev.rejected ? null : this.tier(ev), flags: ev.flags, img: ev.img } : null });
       if (!ev) continue;
       this.checked.set(pid, ev);
       if (ev.rejected) this.log(`  ✗ ${it.title.slice(0, 60)} — ${ev.note}`);
@@ -281,6 +290,9 @@ export class Hunt {
     const exact = [...this.thumb].filter(([id, p]) => p >= EXACT_MIN && !this.checked.has(id) && this.seen.has(id))
       .map(([id]) => this.seen.get(id)).sort(byPrice);
     const pick = exact.slice(0, PER_LEVEL);
+    this.tr("pick", { pool: pool.length, free: free.length, paid: paid.length, want: want.map((x) => x.join("")),
+      looked: look.map((h) => [h.id, h.list_price, h.free_ship ? "free" : "paid", this.thumb.get(h.id) ?? null, h.title.slice(0, 70)]),
+      open: pick.map((h) => h.id) });
     this.log("  " + t("a_opening", { n: pick.length }));
     return pick;
   }
@@ -333,10 +345,13 @@ export class Hunt {
   async run() {
     this.log(t("a_model", { m: this.model.label() }));
     const img = await this.refPhoto();
+    this.tr("start", { ref_id: this.ref.id, title: this.ref.item.title, variant: this.ref.variant ? this.ref.variant.attrs : null,
+      ref_photo: img, user_photo: !!this.ref.image, model: this.model.label(), currency: this.cur() });
     this.image = img ? await toJpegB64(img) : null;
     if (!this.image) throw new Error(t("a_no_photo"));
     await this.understand();
     this.refEval = await this.evaluate(this.ref.item, "ref");
+    this.tr("ref_eval", { result: this.refEval, shipping: this.ref.item.shipping });
     if (this.refEval) this.log(t("a_reference", { t: this.m(this.refEval.total), p: this.m(this.refEval.price), s: this.m(this.refEval.shipping) }));
     this.publish();
     let n = 0;
@@ -347,10 +362,12 @@ export class Hunt {
       for (const [desc, fn] of this.plan(n)) {
         if (this.cancelled) break;
         let h = [];
-        try { h = await fn(); } catch (e) { this.log("  " + t("a_err", { d: desc, e: e.message })); continue; }
+        try { h = await fn(); } catch (e) { this.tr("search_error", { level: n, desc, error: e.message }); this.log("  " + t("a_err", { d: desc, e: e.message })); continue; }
         const fresh = h.filter((x) => !this.seen.has(x.id));
         for (const x of h) if (!this.seen.has(x.id)) this.seen.set(x.id, x);
         this.log("  " + t("a_found", { d: desc, n: h.length, k: fresh.length }));
+        this.tr("search", { level: n, desc, n: h.length, fresh: fresh.length,
+          items: h.map((x) => [x.id, x.list_price, x.free_ship ? "free" : "paid", x.welcome ? "welcome" : "", x.bundle ? "bundle" : "", x.title.slice(0, 80)]) });
         hits.push(...fresh);
       }
       const pick = this.cancelled ? [] : await this.pick(hits);
@@ -359,6 +376,8 @@ export class Hunt {
       this.updateBest();
       const improved = this.best && this.best.total < before - 0.005;
       this.levels.push({ n, found: hits.length, opened, improved: !!improved });
+      this.tr("level", { n, found: hits.length, opened, improved: !!improved, best: this.best ? [this.best.id, this.best.total] : null, fatigue: this.fatigue });
+      this.on.level?.();
       if (improved) { this.fatigue = 0; this.log("  " + t("a_new_best", { p: this.m(this.best.total) })); }
       else if (n >= FREE_LEVELS && (opened || !pick.length)) this.fatigue++;
       this.publish();
@@ -368,6 +387,9 @@ export class Hunt {
     }
     await this.score();
     this.done = true;
+    this.tr("done", { secs: this.elapsed(), levels: this.levels.length, seen: this.seen.size, opened: this.checked.size,
+      best: this.best ? [this.best.id, this.best.total] : null, ref_total: this.refEval?.total ?? null, confidence: this.confidence,
+      blocked: this.blocked, cancelled: this.cancelled });
     this.log(t("a_done", { s: this.elapsed(), l: this.levels.length, n: this.seen.size, k: this.checked.size }));
     this.publish();
   }

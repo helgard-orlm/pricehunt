@@ -77,6 +77,10 @@ The panel asks for a model address on first start (⚙):
 
 The model must see images, and the server should return `logprobs` (Ollama and llama.cpp both do) for the match percentages.
 
+## Developer log
+
+⚙ → *Developer log* takes an address. If you set it, every search POSTs its detailed trace there: each query and what came back, which thumbnails were compared and their scores, every opened card with its variants, shipping, "same type" and "same model" scores, and why it was rejected. `research/logsink.py` is a tiny receiver that stores the traces as JSON files. **Empty by default: nothing is sent anywhere.**
+
 ## Languages
 
 The panel and the agent's log are in English, Russian and Ukrainian (⚙ → Language). By default the panel follows the browser language. The agent's questions to the model are always in English, because that is how everything above was measured.

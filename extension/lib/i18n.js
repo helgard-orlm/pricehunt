@@ -5,6 +5,7 @@ export const LANGS = { en: "English", ru: "Русский", uk: "Українс�
 
 const D = {
   en: {
+    dbg_label: "Developer log (optional)", dbg_hint: "If set, every search sends its detailed log to this address. Leave empty: nothing is sent anywhere.",
     copy_log: "Copy log and results", copied: "Copied ✓",
     same_model: "same model {p}",
     a_spec_first: "cards with {s} in the title first: {n} of {m}",
@@ -71,6 +72,7 @@ const D = {
     captcha_timeout: "captcha not solved within 5 minutes", model_http: "the model answered {s}: {t}",
   },
   ru: {
+    dbg_label: "Журнал для разработчика (необязательно)", dbg_hint: "Если указан, каждый поиск отправляет подробный журнал на этот адрес. Пусто — ничего никуда не уходит.",
     copy_log: "Скопировать журнал и результаты", copied: "Скопировано ✓",
     same_model: "та же модель {p}",
     a_spec_first: "сначала карточки с {s} в названии: {n} из {m}",
@@ -137,6 +139,7 @@ const D = {
     captcha_timeout: "капча не решена за 5 минут", model_http: "модель ответила {s}: {t}",
   },
   uk: {
+    dbg_label: "Журнал для розробника (необов\'язково)", dbg_hint: "Якщо вказано, кожен пошук надсилає докладний журнал на цю адресу. Порожньо — нічого нікуди не йде.",
     copy_log: "Скопіювати журнал і результати", copied: "Скопійовано ✓",
     same_model: "та сама модель {p}",
     a_spec_first: "спершу картки з {s} у назві: {n} з {m}",

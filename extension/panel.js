@@ -35,6 +35,7 @@ async function showSetup(open) {
   cfg = await loadSettings();
   $("base").value = cfg.base;
   $("key").value = cfg.key || "";
+  try { $("dbg").value = (await api.storage.local.get("debugUrl")).debugUrl || ""; } catch {}
   $("setup").hidden = !open;
   if (open) await probe();
 }
@@ -76,6 +77,12 @@ async function probe() {
 $("gear").onclick = () => showSetup($("setup").hidden);
 $("probe").onclick = probe;
 $("savecfg").onclick = async () => {
+  // журнал для разработчика: адрес приёмника (пусто — ничего никуда не уходит); разрешение на адрес — по этой кнопке
+  const dbg = $("dbg").value.trim();
+  try {
+    if (dbg && api.permissions?.request) api.permissions.request({ origins: [new URL(dbg).origin + "/*"] }).catch(() => {});
+    await api.storage.local.set({ debugUrl: dbg });
+  } catch {}
   const opt = $("modelsel").selectedOptions[0];
   if (!opt) { $("probeout").textContent = t("need_model"); return; }
   cfg = { base: $("base").value.trim() || "http://localhost:11434", kind: $("modelsel").dataset.kind || "ollama",
@@ -155,7 +162,7 @@ function renderProduct() {
 $("go").onclick = async () => {
   const v = chosen();
   if (!v || !cfg?.model) return;
-  logLines = [];
+  logLines = []; huntId = null;
   $("log").textContent = "";
   $("run").hidden = false; $("results").hidden = false; $("mine").hidden = true;
   $("list").innerHTML = ""; $("verdict").textContent = "";
@@ -163,11 +170,12 @@ $("go").onclick = async () => {
   hunt = new Hunt({
     ref: { id: product.id, item: product.item, variant: product.groups.length ? v : null, image: refPhoto },
     model: new Model(cfg),
-    on: { log, update: render, captcha: (on) => ($("captcha").hidden = !on),
+    on: { log, update: render, captcha: (on) => ($("captcha").hidden = !on), level: () => sendTrace(),
           refPhoto: (u) => { $("photos").querySelectorAll("img").forEach((im) => im.classList.toggle("on", im.dataset.u === u)); $("pimg").src = u; } },
   });
   try { await hunt.run(); }
-  catch (e) { log(t("error", { e: e.message })); }
+  catch (e) { log(t("error", { e: e.message })); hunt.tr("error", { error: e.message, stack: String(e.stack || "").slice(0, 800) }); }
+  await sendTrace();
   $("stop").hidden = true; $("mine").hidden = false;
   renderProduct();
   saveHistory();
@@ -188,6 +196,19 @@ $("copylog").onclick = async () => {
   try { await navigator.clipboard.writeText(text); $("copylog").textContent = t("copied"); } catch { $("copylog").textContent = "✗"; }
   setTimeout(() => ($("copylog").textContent = t("copy_log")), 1500);
 };
+
+// ---------- журнал для разработчика ----------
+let huntId = null;
+async function sendTrace() {
+  if (!hunt) return;
+  let url = "";
+  try { url = (await api.storage.local.get("debugUrl")).debugUrl || ""; } catch {}
+  if (!url) return;
+  huntId = huntId || new Date().toISOString().replace(/[:.]/g, "-") + "_" + (product?.id || "x");
+  const body = { id: huntId, version: api.runtime.getManifest().version, lang: getLang(), url: product ? `https://www.aliexpress.com/item/${product.id}.html` : null,
+                 lines: logLines, trace: hunt.trace, verdict: $("verdict").textContent };
+  try { await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); } catch {}
+}
 
 function log(t) {
   logLines.push(new Date().toLocaleTimeString().slice(0, 8) + " " + t);
