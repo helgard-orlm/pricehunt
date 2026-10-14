@@ -12,7 +12,8 @@ import time
 import ali
 import models
 
-SAME_MIN = 0.3          # ниже — «не такой, как на фото пользователя»
+SAME_MIN = 0.3          # ниже — «другой», чем на фото пользователя
+EXACT_MIN = 0.7         # от этого — «точно такой»; лучшим считается только он (ступени: точно / похожий / другой)
 MATCH_MIN = 0.7         # выше — «точное совпадение»: его название идёт в поисковые запросы
 THUMBS_PER_LEVEL = 6    # сравнение миниатюры с образцом ~7 с (замер 14.10), карточка ~20–35 с
 FREE_LEVELS = 3
@@ -31,12 +32,32 @@ def plug_of(attrs):
     return m.group(1).upper() if m else None
 
 
+SPEC_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(w|mah|mm|cm|inch|in|gb|tb|ah)\b", re.I)
+
+
+def spec_tokens(text):
+    """«100W», «200-240V», «2.8 inch» -> {('100','w'), ...}; диапазоны напряжения не дробим (их проверяет модель)."""
+    out = set()
+    for num, unit in SPEC_RE.findall(text or ""):
+        u = unit.lower()
+        u = "inch" if u in ("in", "inch") else u
+        out.add((num.replace(",", "."), u))
+    return out
+
+
+def has_spec(text, tok):
+    num, unit = tok
+    alt = "(?:inch|in|\"|'')" if unit == "inch" else re.escape(unit)
+    return re.search(rf"(?<![\d.]){re.escape(num)}\s*{alt}\b", text or "", re.I) is not None
+
+
 class Hunt:
-    def __init__(self, ship_to="UA", query=None, image=None, log=print, model=None, fetcher=None, ref_url=None):
+    def __init__(self, ship_to="UA", query=None, image=None, log=print, model=None, fetcher=None, ref_url=None, ref_sku=None):
         self.ship_to = ship_to
         self.query = (query or "").strip()
         self.image = models.to_jpeg(image) if image else None   # образец (JPEG); AliExpress отдаёт AVIF/WebP
         self.ref_url = (ref_url or "").strip()
+        self.ref_sku = (ref_sku or "").strip()   # вариант, который пользователь выбрал кнопками
         self.ref = None             # товар по ссылке пользователя — образец и цена, которую надо побить
         self.log = log
         self.seen = {}              # id -> строка выдачи (всё, что хоть раз видели)
@@ -57,6 +78,14 @@ class Hunt:
         self.fetcher_factory = fetcher   # None = робот-браузер на сервере; иначе функция -> объект с .item(pid)
 
     ref_raw = None
+    ref_variant = None
+    user_text = ""
+
+    def hard_specs(self):
+        """Обязательные числа: из текста пользователя и из варианта по ссылке (100W, 220V, 2.8 inch…)."""
+        if self.ref_variant:
+            return spec_tokens(" ".join(self.ref_variant["attrs"]))   # выбрано кнопками — главнее всего
+        return spec_tokens((self.user_text or self.query) if (self.user_text or not self.ref_raw) else "")
 
     def load_reference(self):
         """Ссылка на товар -> название (как запрос, если его нет), главное фото (как образец), сам товар (как планка цены)."""
@@ -72,14 +101,21 @@ class Hunt:
         if not it:
             self.log("  ссылка не открылась"); return
         self.ref_raw = it
+        self.ref_variant = None
+        if self.ref_sku:
+            self.ref_variant = next((v for v in it["variants"] if v["sku"] == self.ref_sku), None)
+        if self.ref_variant:
+            self.log(f"  ты выбрал вариант: «{'; '.join(self.ref_variant['attrs'])}» — это требование, ищу такой же")
+            if self.ref_variant.get("img"):
+                self.ref_variant_img = self.ref_variant["img"]
         if len(self.query.split()) < 3:
             short = " ".join(re.sub(r"\s+", " ", it["title"] or "").split()[:8])
             self.log(f"  запрос из названия образца: «{short}»" + (f" (твой текст «{self.query}» учту при отборе)" if self.query else ""))
             self.user_text = self.query
             self.query = short
-        if not self.image and it.get("main_images"):
+        if not self.image and (it.get("main_images") or getattr(self, "ref_variant_img", None)):
             import urllib.request
-            u = it["main_images"][0]
+            u = getattr(self, "ref_variant_img", None) or it["main_images"][0]
             u = ("https:" + u) if u.startswith("//") else u
             try:
                 self.image = models.to_jpeg(urllib.request.urlopen(
@@ -124,21 +160,21 @@ class Hunt:
                 plan.append((f'«{q[0]}»', lambda: self._search(q[0], sort="price_asc")))
         elif n == 2:
             for qq in self._fresh(self.title_queries)[:2]:
-                plan.append((f'из названий совпадений «{qq}», по цене', lambda qq=qq: self._search(qq, sort="price_asc")))
+                plan.append((f'из названий совпадений «{qq}», лучшие совпадения', lambda qq=qq: self._search(qq, sort="default")))
             for qq in self._fresh(q)[:3 - min(2, len(plan))]:
                 plan.append((f'переформулировка «{qq}», по цене', lambda qq=qq: self._search(qq, sort="price_asc")))
         elif n == 3:
             if self.best:
                 plan.append(("похожие по фото лучшего найденного", self._photo_search_best))
             for qq in self._fresh(self.title_queries)[:1]:
-                plan.append((f'из названий совпадений «{qq}»', lambda qq=qq: self._search(qq, sort="price_asc")))
+                plan.append((f'из названий совпадений «{qq}», лучшие совпадения', lambda qq=qq: self._search(qq, sort="default")))
             for qq in self._fresh(q)[:2]:
                 plan.append((f'переформулировка «{qq}»', lambda qq=qq: self._search(qq, sort="price_asc")))
         else:
             fresh = self._fresh(self.title_queries)
             if fresh:
                 qq = fresh[0]
-                plan.append((f'из названий совпадений «{qq}»', lambda qq=qq: self._search(qq, sort="price_asc")))
+                plan.append((f'из названий совпадений «{qq}», лучшие совпадения', lambda qq=qq: self._search(qq, sort="default")))
             k = n - 3
             src = ([self.query] if self.query else []) + self.title_queries + q
             qq = src[(k - 1) % len(src)]
@@ -197,6 +233,8 @@ class Hunt:
     # ---------- проверка кандидата ----------
     def evaluate(self, it, source="agent"):
         """it = результат ali.item. Выбирает нужный вариант, считает настоящую цену, смотрит фото."""
+        if source == "ref" and self.ref_variant:
+            it = dict(it, variants=[self.ref_variant])
         variants = [v for v in it["variants"] if v.get("salable", True) and v.get("price")]
         if not variants:
             return None
@@ -209,9 +247,22 @@ class Hunt:
                   "Which variant numbers are exactly the wanted product (not an accessory, cable only, or a different item)? "
                   'If the shopper must ship to ' + self.ship_to + ', prefer a plug/version usable there when it matters. '
                   'JSON: {"match": [numbers], "note": "one short sentence"}')
-        ans = self.model.ask_json(prompt, [], 200, default={}) or {}
+        if source == "ref" and self.ref_variant:
+            ans = {"match": [0], "note": "твой выбранный вариант"}
+        else:
+            ans = self.model.ask_json(prompt, [], 200, default={}) or {}
         match = [variants[i] for i in ans.get("match", []) if isinstance(i, int) and 0 <= i < len(variants)]
         flags = []
+        specs = self.hard_specs() if source != "ref" else set()
+        for tok in specs:
+            # требование действует, если у товара вообще есть варианты с этой единицей (иначе число может быть только в названии)
+            if any(SPEC_RE.search(" ".join(v["attrs"])) and tok[1] in {u.lower() for _, u in SPEC_RE.findall(" ".join(v["attrs"]))} for v in variants):
+                keep = [v for v in match if has_spec(" ".join(v["attrs"]), tok)]
+                if not keep and match:
+                    ans["note"] = f"нет варианта {tok[0]}{tok[1].upper()} (обязательно по твоему запросу/образцу)"
+                match = keep
+            elif not has_spec(it["title"], tok) and match:
+                flags.append(f"в названии нет {tok[0]}{tok[1].upper()} — проверь вручную")
         if not match:
             return {"id": it["id"], "title": it["title"], "rejected": True, "note": ans.get("note", "нет подходящего варианта"),
                     "source": source, "url": f"https://www.aliexpress.com/item/{it['id']}.html"}
@@ -241,7 +292,7 @@ class Hunt:
                                   "A product that exceeds a minimum requirement (e.g. more watts, more ports) still counts as YES. "
                                   "Answer YES or NO, then a dash and what is actually shown (max 12 words). "
                                   "If wattage, model or chip names are printed, quote them.", [img], 60)
-                if look.upper().startswith("NO"):
+                if look.upper().startswith("NO") and not self.image:
                     flags.append("фото не совпадает: " + look.split("-", 1)[-1].strip())
             except Exception as e:
                 look = f"ERR {e}"
@@ -357,7 +408,10 @@ class Hunt:
         if self.ref_url:
             self.load_reference()
         self.understand()
-        if getattr(self, "user_text", ""):
+        if self.ref_variant:
+            self.intent.setdefault("must", []).append("exactly this variant: " + "; ".join(
+                a.split(":", 1)[-1].strip() for a in self.ref_variant["attrs"]))
+        elif self.user_text:
             self.intent.setdefault("must", []).append(f"shopper also said: {self.user_text}")
         if self.ref_raw:
             self.queries_from_matches()
@@ -394,7 +448,12 @@ class Hunt:
                 photo_hits = [h for h in hits if h.get("_photo")][:4]
                 self.score_thumbs(photo_hits + [c for c in cand if not c.get("_photo")])
                 self.queries_from_matches()
-                cand.sort(key=lambda c: (self.thumb_same.get(c["id"], 0.5) < SAME_MIN, c["list_price"]))
+                exact = [h for h in (photo_hits + hits) if self.thumb_same.get(h["id"], 0) >= EXACT_MIN
+                         and h["id"] not in self.checked]
+                ids = {c["id"] for c in cand}
+                cand += [h for h in dict((h["id"], h) for h in exact).values() if h["id"] not in ids]
+                cand.sort(key=lambda c: (-(self.thumb_same.get(c["id"], 0.5) >= EXACT_MIN),
+                                         self.thumb_same.get(c["id"], 0.5) < SAME_MIN, c["list_price"]))
             pick = cand[:PER_LEVEL]
             self.log(f"  подходят по названию {len(cand)}, открываю {len(pick)}"
                      + (" (сначала похожие на твоё фото, потом дешёвые)" if self.image else " самых дешёвых"))
@@ -423,13 +482,22 @@ class Hunt:
         self.done = True
         self.log(f"готово за {time.time() - self.t0:.0f} с: уровней {len(self.levels)}, видел {len(self.seen)}, открыл {len(self.checked)}")
 
-    def _fits(self, c):
+    def tier(self, c):
+        """0 — точно такой, 1 — похожий / без образца, 2 — другой."""
         if any(f.startswith("фото не совпадает") for f in c["flags"]):
-            return False
-        return c.get("same") is None or c["same"] >= SAME_MIN
+            return 2
+        sm = c.get("same")
+        if sm is None:
+            return 0 if c["source"] == "ref" or not self.image else 1
+        return 0 if sm >= EXACT_MIN else (1 if sm >= SAME_MIN else 2)
+
+    def _fits(self, c):
+        return self.tier(c) < 2
 
     def _update_best(self):
         ok = [c for c in self.checked.values() if not c["rejected"] and c["source"] != "ref" and self._fits(c)]
+        top_tier = min((self.tier(c) for c in ok), default=None)
+        ok = [c for c in ok if self.tier(c) == top_tier]
         self.best = min(ok, key=lambda c: c["total"]) if ok else None
 
     # ---------- проценты ----------
@@ -455,10 +523,13 @@ class Hunt:
 
     def score(self):
         self._update_best()
-        rows = sorted([c for c in self.checked.values() if not c["rejected"]],
-                      key=lambda c: (not self._fits(c), c["total"]))[:10]
-        if self.ref and not self.ref.get("rejected") and self.ref not in rows:
+        rows = sorted([c for c in self.checked.values() if not c["rejected"] and c["source"] != "ref"],
+                      key=lambda c: (self.tier(c), c["total"]))[:10]
+        if self.ref and not self.ref.get("rejected"):
             rows.append(self.ref)
+            rows.sort(key=lambda c: (self.tier(c), c["total"]))
+        for c in rows:
+            c["tier"] = self.tier(c)
         if not rows:
             self.top = []; self.confidence = None; return
         head = (f"A shopper in {self.ship_to} wants: {self.intent['what']}. Must have: {', '.join(self.intent.get('must', []))}.\n"

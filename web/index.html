@@ -45,6 +45,10 @@ button.ghost{background:transparent;color:var(--acc);border:1px solid var(--acc)
 .tag.human{background:var(--humanbg);color:var(--human)}
 .tag.ref{background:var(--line);color:var(--ink)}
 .dim{opacity:.55}
+.chip{display:inline-block;border:1px solid var(--line);border-radius:16px;padding:4px 10px;margin:3px 4px 0 0;cursor:pointer;font-size:13px;background:var(--bg);color:var(--ink)}
+.chip.on{border-color:var(--acc);background:var(--acc2);color:var(--acc);font-weight:600}
+.chip.off{opacity:.4}
+.gname{font-size:12px;color:var(--mute);margin-top:6px}
 #score{font-size:17px;font-weight:600}
 details summary{cursor:pointer;color:var(--mute)}
 .hist a{color:var(--acc)}
@@ -78,7 +82,19 @@ details summary{cursor:pointer;color:var(--mute)}
     <input type="text" id="q" placeholder="например: 65W USB-C charger, ESP32 2.8 inch display">
     <div id="drop" title="Нажми, перетащи или вставь картинку (Ctrl+V)"><span id="dropt">📷 фото товара</span></div>
   </div>
-  <input type="text" id="refurl" placeholder="или ссылка на товар-образец: агент сам возьмёт фото и название и попробует найти дешевле" style="margin-top:10px">
+  <div style="display:flex;gap:8px;margin-top:10px">
+    <input type="text" id="refurl" placeholder="или ссылка на товар-образец: агент откроет его и покажет варианты">
+    <button class="ghost" id="openref" style="white-space:nowrap">Открыть</button>
+  </div>
+  <div id="refbox" hidden style="margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:10px">
+    <div style="display:flex;gap:10px;align-items:flex-start">
+      <img id="refimg" alt="" style="width:84px;height:84px;object-fit:cover;border-radius:6px;background:var(--bg)">
+      <div style="flex:1;min-width:0"><div id="reftitle" style="font-weight:600;font-size:14px"></div>
+        <div id="refprice" class="mute" style="font-size:13px;margin-top:4px"></div></div>
+    </div>
+    <div id="refgroups" style="margin-top:8px"></div>
+    <div class="mute" style="font-size:12px;margin-top:6px">Выбранный вариант — требование: агент ищет именно такой и пытается побить его цену.</div>
+  </div>
   <input type="file" id="file" accept="image/*" hidden>
   <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <button id="go">Найти</button>
@@ -163,14 +179,52 @@ $("drop").ondrop=e=>{e.preventDefault();setImage(e.dataTransfer.files[0])};
 document.addEventListener("paste",e=>{for(const it of e.clipboardData.items){if(it.type.startsWith("image/")){setImage(it.getAsFile());break}}});
 $("clearimg").onclick=()=>{img64=null;$("drop").innerHTML='<span>📷 фото товара</span>';$("clearimg").hidden=true};
 $("q").onkeydown=e=>{if(e.key==="Enter")$("go").click()};
-$("refurl").onkeydown=e=>{if(e.key==="Enter")$("go").click()};
+$("refurl").onkeydown=e=>{if(e.key==="Enter")$("openref").click()};
+$("refurl").oninput=()=>{REF=null;$("refbox").hidden=true};
+let REF=null, PICK={};
+function pickedVariant(){
+  if(!REF)return null;
+  return REF.variants.find(v=>REF.groups.every(g=>v.attrs.includes(g.name+": "+PICK[g.name])))||null;
+}
+function renderRef(){
+  const v=pickedVariant();
+  $("refgroups").innerHTML=REF.groups.map(g=>`<div class="gname">${esc(g.name)}</div>`+g.values.map(x=>{
+     const on=PICK[g.name]===x.value;
+     const test=Object.assign({},PICK,{[g.name]:x.value});
+     const exists=REF.variants.some(vv=>REF.groups.every(gg=>vv.attrs.includes(gg.name+": "+test[gg.name])));
+     return `<span class="chip${on?" on":""}${exists?"":" off"}" data-g="${esc(g.name)}" data-v="${esc(x.value)}">${esc(x.value)}</span>`}).join("")).join("");
+  $("refgroups").querySelectorAll(".chip").forEach(c=>c.onclick=()=>{PICK[c.dataset.g]=c.dataset.v;renderRef()});
+  if(v){
+    const p=v.welcome_deal&&v.original?v.original:v.price;
+    $("refprice").innerHTML=`выбрано: <b>${esc(v.attrs.map(a=>a.split(": ").pop()).join(" · "))}</b> — ${money(p,REF.currency)}${REF.shipping!=null?" + доставка "+money(REF.shipping,REF.currency):""}${v.welcome_deal?" (цена для новичков "+money(v.price,REF.currency)+" не учтена)":""}`;
+    if(v.img)$("refimg").src=v.img;
+  }else{$("refprice").textContent="такого сочетания нет — выбери другое"}
+  $("go").textContent="Искать дешевле такой же";
+}
+$("openref").onclick=async()=>{
+  const url=$("refurl").value.trim();if(!url)return;
+  $("openref").disabled=true;$("status").textContent="открываю товар…";
+  try{
+    const r=await fetch("/api/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url,fetch:$("fetch").value,ship_to:$("ship").value})});
+    const d=await r.json();if(!r.ok)throw new Error(d.error||r.status);
+    REF=d;PICK={};
+    const start=d.variants.find(v=>v.sku===d.url_sku)||d.variants.find(v=>v.salable!==false)||d.variants[0];
+    d.groups.forEach(g=>{const a=(start?start.attrs:[]).find(x=>x.startsWith(g.name+": "));PICK[g.name]=a?a.slice(g.name.length+2):g.values[0].value});
+    $("refimg").src=d.img||"";$("reftitle").textContent=d.title||"";$("refbox").hidden=false;renderRef();
+    $("status").textContent=d.groups.length?"выбери нужный вариант и нажми «Искать дешевле такой же»":"у товара один вариант";
+  }catch(e){$("status").textContent="ошибка: "+e.message}
+  $("openref").disabled=false;
+};
 
 $("go").onclick=async()=>{
   const q=$("q").value.trim(), ref=$("refurl").value.trim();
+  if(ref&&!REF){$("openref").click();return}
+  const pv=pickedVariant();
+  if(ref&&REF&&REF.groups.length&&!pv){$("status").textContent="такого варианта нет — выбери другое сочетание";return}
   if(!q&&!img64&&!ref){$("status").textContent="напиши название, добавь фото или ссылку на товар";return}
   $("go").disabled=true;$("status").textContent="запускаю…";
   try{
-    const r=await fetch("/api/hunt",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ship_to:$("ship").value,query:q,image_b64:img64,model:modelCfg(),fetch:$("fetch").value,ref_url:ref})});
+    const r=await fetch("/api/hunt",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ship_to:$("ship").value,query:q,image_b64:img64,model:modelCfg(),fetch:$("fetch").value,ref_url:ref,ref_sku:pv?pv.sku:null})});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||r.status);
     open_job(d.id);

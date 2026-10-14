@@ -249,3 +249,15 @@ def image_search(path, ship_to="UA", currency="USD"):
     if len(hits) < 10:
         hits = search_url(url, ship_to, currency)
     return url, hits
+
+
+def variant_groups(it):
+    """{"Колір": [{"value": "100W", "img": ...}, ...], ...} из attrs вида «Имя: значение»."""
+    groups = {}
+    for v in it["variants"]:
+        for a in v["attrs"]:
+            name, _, val = a.partition(":")
+            g = groups.setdefault(name.strip(), [])
+            if val.strip() and val.strip() not in [x["value"] for x in g]:
+                g.append({"value": val.strip(), "img": v.get("img")})
+    return [{"name": k, "values": v} for k, v in groups.items()]

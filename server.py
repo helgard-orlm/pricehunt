@@ -135,7 +135,7 @@ class ExtFetcher:
 
 
 class Job:
-    def __init__(self, ship_to, query, image, model=None, fetch="server", ref_url=None):
+    def __init__(self, ship_to, query, image, model=None, fetch="server", ref_url=None, ref_sku=None):
         self.id = time.strftime("%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
         self.lines = []
         self.error = None
@@ -147,7 +147,7 @@ class Job:
         self.fetch = fetch
         self.h = hunt.Hunt(ship_to=ship_to, query=query, image=image, log=self.log, model=model,
                            fetcher=(lambda st, lg: ExtFetcher(st, lg)) if fetch == "extension" else None,
-                           ref_url=ref_url)
+                           ref_url=ref_url, ref_sku=ref_sku)
         if image:
             try:
                 open(os.path.join(JOBS_DIR, self.id + "_photo.jpg"), "wb").write(self.h.image)
@@ -274,10 +274,42 @@ class H(BaseHTTPRequestHandler):
             fetch = b.get("fetch") or "server"
             if fetch == "extension" and not Ext.connected():
                 return self._send(400, {"error": "расширение не на связи — открой браузер с расширением"})
-            j = Job(b.get("ship_to") or "UA", q, img, b.get("model"), fetch, ref_url)
+            j = Job(b.get("ship_to") or "UA", q, img, b.get("model"), fetch, ref_url, b.get("ref_sku"))
             JOBS[j.id] = j
             j.start()
             return self._send(200, {"id": j.id})
+        if p == "/api/preview":
+            import re as _re
+            url = (b.get("url") or "").strip()
+            m = _re.search(r"/item/(\d+)", url) or _re.search(r"(\d{10,})", url)
+            if not m:
+                return self._send(400, {"error": "это не похоже на ссылку на товар AliExpress"})
+            pid = m.group(1)
+            try:
+                if b.get("fetch") == "extension":
+                    if not Ext.connected():
+                        return self._send(400, {"error": "расширение не на связи"})
+                    it = ExtFetcher(b.get("ship_to") or "UA", lambda s: None).item(pid)
+                else:
+                    f = ali.Fetcher(b.get("ship_to") or "UA")
+                    try:
+                        it = f.item(pid)
+                    finally:
+                        f.close()
+            except ali.Captcha:
+                return self._send(409, {"error": "AliExpress просит капчу — попробуй режим «мой браузер»"})
+            except Exception as e:
+                return self._send(500, {"error": f"не открылся: {e}"})
+            if not it:
+                return self._send(404, {"error": "товар не открылся"})
+            sku = _re.search(r"(?:skuId=|%21)(12\d{12,})", url)
+            ships = [x for x in it["shipping"] if x.get("fee") is not None]
+            return self._send(200, {"id": pid, "title": it["title"], "img": (it.get("main_images") or [None])[0],
+                                    "currency": it.get("currency"), "groups": ali.variant_groups(it),
+                                    "variants": [{k: v[k] for k in ("sku", "attrs", "price", "original", "welcome_deal", "img", "salable")}
+                                                 for v in it["variants"]],
+                                    "shipping": min((x["fee"] for x in ships), default=None),
+                                    "url_sku": sku.group(1) if sku else None})
         if p == "/api/ext/result":
             Ext.last_seen = time.time()
             slot = Ext.waiting.get(b.get("id"))
