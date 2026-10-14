@@ -28,7 +28,7 @@ Other traps the agent handles:
 
 It follows the method a human bargain hunter uses (this is how the author finds parts by hand):
 
-1. **Search by photo — of one item.** Listings often open with a collage of all sizes; a photo of the single item you chose is far more precise. pricehunt uses the chosen variant's own photo, otherwise asks the model which gallery photo shows one item; the panel shows the reference photo and you can click another. (With the single 100 W photo instead of the collage, MiniCPM-V recognised 8 matching COB panels in our cached listings instead of 0.) The photo goes into AliExpress' own camera search.
+1. **Search by photo — of one item.** Listings often open with a collage of all sizes; a photo of the single item you chose is far more precise. pricehunt uses the chosen variant's own photo, otherwise asks the model which gallery photo shows one item; the panel shows the reference photo and you can click another. (On the same 25 cached COB listings, MiniCPM-V called 0 of them a match when the reference was the all-sizes collage, and 8 when it was the single 100 W photo.) The photo goes into AliExpress' own camera search.
 2. **Keep only exact matches.** The model compares each thumbnail with your photo and opens only the ones that are the same product, cheapest first.
 3. **Search by the seller's verbatim title.** The title of an exact match is a better query than any words you'd invent, because many parts (an ESP32 board with a screen, a COB chip) have no common name.
 4. **Split the results itself** into free and paid shipping, sort each part by price and check the cheapest of each.
@@ -49,7 +49,7 @@ All numbers below were measured with **MiniCPM-V 4.7 (35B-A3B, Q6_K)** served by
 
 What is **not** measured yet:
 - How well it catches *lying* listings, where the title says charger and the photo shows a cable. The 49/49 above are honestly named variants.
-- Other models only partly. Gemma 4 12B (Ollama `gemma4:12b-it-qat`) scored 45/49 on variant photos: it mistook "cable only" for "charger with cable". Gemma 4 31B through Ollama Cloud (`gemma4:31b-cloud`) scored 47/49, with the same trap, and it's fast (0.9 s per photo). Its "same product as your photo?" answers were weaker, though: of 7 COB listings it called the same, about 6 were a different type (copper DC chips, SMD boards, 12 V panels), and it rejected 4 real ESP-01 adapters shown next to the modules. Cloud models also send your photos to the cloud and return no logprobs. In that case the extension falls back to a plain Yes/No, so the percentages turn into 0%/100%.
+- Other models only partly. Gemma 4 12B (Ollama `gemma4:12b-it-qat`) scored 45/49 on variant photos: it mistook "cable only" for "charger with cable". Gemma 4 31B through Ollama Cloud (`gemma4:31b-cloud`) scored 47/49, falling for the same trap, and it's fast (0.9 s per photo). We also asked "is this the same type of product as the reference photo?" with the single 100 W COB photo as the reference, on 25 cached COB listings. In 5 cases Gemma said yes and MiniCPM-V said no. We looked at all 5: each is a different type (copper DC chips, a plant-grow board, small round/square COBs). One sample, so treat it as a hint, not a benchmark. Cloud models also send your photos to the cloud and return no logprobs. In that case the extension falls back to a plain Yes/No, so the percentages turn into 0%/100%.
 - The percentages on result cards are the model's probability of answering "Yes". That's an estimate, not a calibrated probability.
 
 ## Install (developer mode)
