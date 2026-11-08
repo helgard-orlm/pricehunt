@@ -12,6 +12,7 @@ import base64, json, os, re, subprocess, threading, time, urllib.request
 GPU_HOST = os.environ.get("GPU_HOST", "192.168.1.104")
 MINICPM = f"http://{GPU_HOST}:8920"
 OLLAMA = f"http://{GPU_HOST}:11434"
+BRIDGE = os.environ.get("BRIDGE_URL", "http://127.0.0.1:8932")
 _lock = threading.Lock()
 
 
@@ -49,6 +50,11 @@ def _unload_ollama(keep=None):
 def available():
     """Список для выпадающего меню: MiniCPM + модели Ollama (со зрением отмечены)."""
     out = [{"kind": "minicpm", "model": "minicpm-v4.7", "label": "MiniCPM-V 4.7 (gpu104, зрение)", "vision": True}]
+    if _up(BRIDGE + "/v1/models"):
+        out += [{"kind": "openai", "base_url": BRIDGE, "model": "haiku", "vision": True,
+                 "label": "Хайку (подписка, зрение, проценты только 0/100)"},
+                {"kind": "openai", "base_url": BRIDGE, "model": "gpt-5.6-luna", "vision": True,
+                 "label": "Луна (подписка, зрение, проценты только 0/100)"}]
     try:
         tags = json.load(urllib.request.urlopen(OLLAMA + "/api/tags", timeout=5)).get("models", [])
     except Exception:
@@ -136,16 +142,23 @@ class Model:
             return default
 
     def yes_prob(self, text, images=()):
-        """Оценка «да» по вероятностям первого токена (logprobs). Если сервер их не отдаёт — None."""
+        """Оценка «да» по вероятностям первого токена (logprobs). Сервер без них — сам ответ: Yes 1, No 0 (как в расширении)."""
         if images and not self.vision:
             images = ()
         content = [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + img_b64(i)}} for i in images]
         content.append({"type": "text", "text": text})
         try:
             r = self._chat(content, 1, {"logprobs": True, "top_logprobs": 10})
-            lps = r["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
         except Exception:
             return None
+        try:
+            lps = r["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
+        except (KeyError, IndexError, TypeError):
+            try:
+                w = (r["choices"][0]["message"].get("content") or "").strip().lower()
+            except (KeyError, IndexError, AttributeError):
+                return None
+            return 1.0 if w.startswith("yes") else 0.0 if w.startswith("no") else None
         yes = no = 0.0
         for t in lps:
             w = t["token"].strip().lower()
